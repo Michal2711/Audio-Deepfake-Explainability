@@ -1,0 +1,34 @@
+# features_ configs.yaml
+
+dataset:
+  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus14/noise_snr30"
+
+audio:
+  sample_rate: 44100
+
+features:
+  max_samples: 10
+  models_to_get_features:
+    - UDIO
+    - SUNO
+    - SUNO_PRO
+    - REAL
+    - ElevenLabs
+  ids_to_get_features:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+  extract_full_track_features: true
+  extract_segmented_features: false
+  segment_duration: 30.0  # Length of each segment in seconds (if segmented features are extracted)
+
+output:
+  result_path: "results/Features/FakeRealMusicOriginalNormalized/minus14/noise_snr30"
+  experiment_name: "Extended_full_track_features"

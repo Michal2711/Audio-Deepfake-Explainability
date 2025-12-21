@@ -1,0 +1,61 @@
+# configs/lime_experiment.yaml
+
+# Dataset configuration
+dataset:
+  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus23/reverb_room"
+  
+# Model configuration
+model:
+  local: false  # true = local model, false = remote API
+
+  # Local model
+  local_model: "awsaf49/sonics-spectttra-alpha-120s"
+  device: "cuda"  # Options: "cuda" or "cpu"
+
+  # Remote model
+  remote_space: "awsaf49/sonics-fake-song-detection"
+  remote_model_type: "SpecTTTra-α"
+  model_time: 120
+
+  retry:
+    max_retries: 10
+    initial_delay: 3  # seconds
+    max_delay: 120.0
+  
+# LIME configuration
+lime:
+  explain: true
+  max_samples_explain: 10
+  num_samples_lime: 500 # Number of samples for LIME (500-1000 for better quality)
+  models_to_explain:
+    - UDIO
+    - SUNO
+    - SUNO_PRO
+    - REAL
+    - ElevenLabs
+  ids_to_explain:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+
+# Output configuration
+output:
+  result_path: "results/AudioLIME/FakeRealMusicOriginalNormalized/minus23/reverb_room"
+  experiment_name: "FULL_TEST_500"
+  
+# Visualization configuration
+visualization:
+  overall: true
+  per_model: true
+
+explanation_variants:
+  full_track_explanations: true
+  segmented_explanations: false
+  segment_duration: 30  # seconds

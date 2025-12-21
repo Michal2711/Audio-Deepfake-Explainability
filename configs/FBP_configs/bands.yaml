@@ -1,0 +1,46 @@
+# Choices of bands preset and attenuation parameters
+preset: "detailed_voice"   # default | detailed_voice | high_resolution
+
+# Leaving some energy in the band (0.0 = mute; 1.0 = no change)
+attenuation: 0.25
+
+# Transition definition (edge smoothing)
+transition:
+  mode: "rel"        # "abs" (Hz) or "rel" (fraction of band width)
+  rel: 0.2           # 20% of band width
+  min_hz: 5.0
+  max_hz: 500.0
+  hz: 200.0          # used when mode == "abs"
+
+# Band presets (Hz)
+presets:
+  default:
+    - [20, 100]
+    - [100, 250]
+    - [250, 2000]
+    - [2000, 4000]
+    - [4000, 8000]
+    - [8000, 16000]
+  detailed_voice:
+    - [20, 60]
+    - [60, 250]
+    - [250, 500]
+    - [500, 2000]
+    - [2000, 4000]
+    - [4000, 6000]
+    - [6000, 12000]
+    - [12000, 21000]
+  high_resolution:
+    - [20, 60]
+    - [60, 100]
+    - [100, 250]
+    - [250, 500]
+    - [500, 1000]
+    - [1000, 2000]
+    - [2000, 4000]
+    - [4000, 6000]
+    - [6000, 8000]
+    - [8000, 10000]
+    - [10000, 12000]
+    - [12000, 16000]
+    - [16000, 21000]

@@ -1,0 +1,73 @@
+# configs/spectrogram_experiment.yaml
+
+# Dataset configuration
+dataset:
+  base_path: "Data/FakeRealMusicOriginal"
+  models_to_process:
+    - UDIO
+    - SUNO
+    - SUNO_PRO
+    - ElevenLabs
+    - REAL
+  max_samples_per_model: 10
+
+# Model configuration  
+model:
+  local: false  # true = local model, false = remote API
+
+  # Local model (used when local: true)
+  local_model: "awsaf49/sonics-spectttra-alpha-120s" # Options: "awsaf49/sonics-spectttra-alpha-120s", "awsaf49/sonics-spectttra-alpha-5s"
+  device: "cuda"  # "cuda" or "cpu" for local model
+
+  # Remote model (used when local: false)
+  remote_space: "awsaf49/sonics-fake-song-detection"
+  remote_model_type: "SpecTTTra-α" # SpecTTTra-γ: Optimized for speed
+                                   # SpecTTTra-β: Balanced performance
+                                   # SpecTTTra-α: Highest accuracy
+  model_time: 120
+  retry:
+    max_retries: 10
+    initial_delay: 3.0
+    max_delay: 120.0
+
+# Spectrogram parameters
+spectrogram:
+  sr: 44100
+  duration: 120
+  n_mels: 128
+  n_fft: 2048
+  hop_length: 512
+
+# Explainability method
+explainability:
+  method: "occlusion"  # "rise" or "occlusion"
+  baseline_threshold: 0.00001  # Minimum prediction to process
+  
+  # RISE parameters (NOT RECOMMENDED - BAD RESULTS)
+  rise:
+    n_masks: 200          # 200-500 for fast, 1000+ for better results
+    mask_probability: 0.5  # 0.5 = 50% of spectrogram kept per mask
+  
+  # Occlusion parameters
+  occlusion:
+    patch_size: [2048, 64]   # [time_frames, freq_bins]
+    stride: [2048, 64]       # [time_stride, freq_stride]
+
+  # Smaller patch_size = more granular but slower
+  # Suggestions:
+  #   Fast:    patch_size: [32, 32], stride: [16, 16]
+  #   Medium:  patch_size: [16, 16], stride: [8, 8]
+  #   Slow:    patch_size: [8, 8],   stride: [4, 4]
+
+  visualization:
+    highlight_percent: 25.0  # Percentage of most important regions to highlight
+    # abs_threshold: 0.0     # Minimum absolute importance to highlight
+
+# Output configuration
+output:
+  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
+  experiment_name: "Win_Saved"
+  
+# Checkpoint
+checkpoint:
+  enabled: true

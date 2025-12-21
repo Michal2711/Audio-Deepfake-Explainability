@@ -1,0 +1,47 @@
+# virtaul environment
+.sonics/
+
+# models / pretrained models
+pretrained_models/
+saved_models/
+models/
+
+# AudioLIME repo
+XAIMethods/
+
+# Datasets
+Data/
+Datasets/
+
+# Audio files (globally)
+*.mp3
+*.wav
+
+# Images
+*.png
+*.txt
+*.csv
+
+# Notebooks
+Notebooks/*
+!Notebooks/**/
+!Notebooks/**/*.ipynb
+
+Notebooks/4. Frequency_Band_Perturbation/
+Notebooks/Splitter/
+
+# Experiments results
+results/
+checkpoints/
+overall_visualizations/
+visualizations_per_model/
+
+
+# Python cache
+__pycache__/
+
+# Model checkpoints
+*.ckpt
+
+# Env freeze
+sonics_req.txt

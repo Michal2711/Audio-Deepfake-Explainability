@@ -1,0 +1,29 @@
+# configs/sonics_config.yaml
+
+# Dataset configuration
+dataset:
+  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus23/reverb_room"
+  sample_rate: 44100
+  
+# Model configuration
+model:
+  local: false  # true = local model, false = remote API
+
+  # Local model
+  local_model: "awsaf49/sonics-spectttra-alpha-120s"
+  device: "cuda"  # Options: "cuda" or "cpu"
+
+  # Remote model
+  remote_space: "awsaf49/sonics-fake-song-detection"
+  remote_model_type: "SpecTTTra-α"
+  model_time: 120
+
+  retry:
+    max_retries: 10
+    initial_delay: 3  # seconds
+    max_delay: 120.0
+  
+# Output configuration
+output:
+  result_path: "results/Predictions/FakeRealMusicOriginalNormalized/minus23/reverb_room/"
+  experiment_name: "FULL_TEST"

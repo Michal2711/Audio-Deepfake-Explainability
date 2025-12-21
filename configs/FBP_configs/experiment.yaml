@@ -1,0 +1,22 @@
+# Paths
+base_path: "Data/FakeRealMusicOriginal"
+output_root: "results/FBP/FakeRealMusicOriginal_v2/"
+experiment_name: "non_local_mix_stft_dvoice_att25_rel20min20max500_norm"
+
+# Model mode: local or remote (gradio space)
+local: false
+limit_per_folder: null   # Set to an integer to limit number of files per folder, or null for no limit
+
+# Local model configuration (when local: true)
+local_model: "awsaf49/sonics-spectttra-alpha-120s"
+
+# Remote model configuration (when local: false)
+remote_space: "awsaf49/sonics-fake-song-detection"
+remote_api_name: "/predict"
+remote_model_type: "SpecTTTra-α"
+
+# Retry configuration for remote API
+retry:
+  max_retries: 10          # Maximum number of attempts for HTTP 502/503/504 errors
+  initial_delay: 3.0       # Initial delay in seconds
+  max_delay: 120.0         # Maximum delay in seconds
