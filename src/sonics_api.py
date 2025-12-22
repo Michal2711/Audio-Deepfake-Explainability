@@ -14,7 +14,7 @@ import random
 
 from gradio_client import Client, handle_file
 import httpx
-from httpx import HTTPStatusError, WriteTimeout
+from httpx import HTTPStatusError, WriteTimeout, ConnectTimeout
 import socket
 
 from sonics import HFAudioClassifier
@@ -85,7 +85,7 @@ class RemoteSonnics:
                 )
                 return float(fake_prob)
             
-            except WriteTimeout as e:
+            except (WriteTimeout, ConnectTimeout) as e:
                 if tmp_path and os.path.exists(tmp_path):
                     try:
                         os.unlink(tmp_path)
@@ -172,7 +172,7 @@ class RemoteSonnics:
                 print(f"      → Fake prob: {fake_prob:.4f}")
                 return float(fake_prob)
             
-            except WriteTimeout as e:
+            except (WriteTimeout, ConnectTimeout) as e:
                 if attempt < self.max_retries - 1:
                     delay = min(
                         self.initial_delay * (2 ** attempt) + random.uniform(0, 1), 

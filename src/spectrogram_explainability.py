@@ -510,7 +510,12 @@ class SpectrogramExplainability:
     
     def _predict_fn(self, waveform: np.ndarray, sr: int) -> float:
         """Wrapper for predictor"""
-        return float(self.predictor.predict(waveform, sr))
+        try: 
+            return float(self.predictor.predict(waveform, sr))
+        except Exception as e:
+            print(f"⚠️  Predict CRASH: {type(e).__name__}: {e}")
+            print("Using SAFE FALLBACK: 0.0")
+            return 0.0
     
     def process_audio_file(
         self,
