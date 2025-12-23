@@ -67,9 +67,12 @@ def save_top_occlusion_patches_from_list(
     sr: int,
     n_fft: int,
     hop_length: int,
+    win_length: int,
+    n_iter: int,
     top_n: int,
     save_dir: Path | str,
-    file_name: str
+    file_name: str,
+    use_original_audio: bool = True
 ):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -96,20 +99,39 @@ def save_top_occlusion_patches_from_list(
         importance = float(p["importance"])
         abs_importance = float(abs(importance))
 
+        window_frames = t_end - t_start
+        window_samples = max(1, window_frames * hop_length)
+
         masked_S = np.zeros_like(S)
         masked_S[f_start:f_end, t_start:t_end] = S[f_start:f_end, t_start:t_end]
 
-        # audio reconstruction
-        y_window_full = librosa.feature.inverse.mel_to_audio(
-            masked_S, sr=sr, n_fft=n_fft, hop_length=hop_length, fmax=sr//2
-        )
+        if use_original_audio:
+            start_sample = int(t_start * hop_length)
+            end_sample = int(start_sample + window_samples)
+            end_sample = min(end_sample, len(y))
 
-        window_frames = t_end - t_start
-        window_samples = max(1, window_frames * hop_length)
-        if len(y_window_full) >= window_samples:
-            y_window = y_window_full[:window_samples]
+            y_window = y[start_sample:end_sample]
+
+            if len(y_window) < window_samples:
+                y_window = np.pad(y_window, (0, window_samples - len(y_window)))
+
         else:
-            y_window = np.pad(y_window_full, (0, window_samples - len(y_window_full)))
+            masked_S = np.zeros_like(S)
+            masked_S[f_start:f_end, t_start:t_end] = S[f_start:f_end, t_start:t_end]
+
+            y_window_full = librosa.feature.inverse.mel_to_audio(
+                masked_S,
+                sr=sr,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                win_length=win_length,
+                n_iter=n_iter
+            )
+
+            if len(y_window_full) >= window_samples:
+                y_window = y_window_full[:window_samples]
+            else:
+                y_window = np.pad(y_window_full, (0, window_samples - len(y_window_full)))
 
         importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
@@ -142,7 +164,11 @@ def compute_occlusion_map(
     predict_fn: Callable,
     sr: int = 44100,
     duration: int = 120,
+    n_fft: int = 2048,
+    hop_length: int = 512,
+    win_length: int = 2048,
     n_mels: int = 128,
+    n_iter: int = 256,
     patch_size: Tuple[int, int] = (16, 16),
     stride: Tuple[int, int] = (8, 8),
     occlusion_value: float = 0.0,
@@ -156,6 +182,9 @@ def compute_occlusion_map(
     :param predict_fn: Function that takes waveform (np.array) and sr, returns fake probability
     :param sr: Sample rate
     :param duration: Duration in seconds
+    :param n_fft: FFT size
+    :param hop_length: Hop length
+    :param win_length: Window length
     :param n_mels: Number of mel bands
     :param patch_size: Size of occlusion patch (time_frames, freq_bins)
     :param stride: Stride for sliding window
@@ -168,8 +197,8 @@ def compute_occlusion_map(
     y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
 
     S = librosa.feature.melspectrogram(
-        y=y, sr=sr, n_mels=n_mels, n_fft=2048, 
-        hop_length=512, fmax=sr//2
+        y=y, sr=sr, n_mels=n_mels, n_fft=n_fft, 
+        hop_length=hop_length, win_length=win_length, fmax=sr//2
     )
     S_db = librosa.power_to_db(S, ref=np.max)
 
@@ -219,7 +248,12 @@ def compute_occlusion_map(
         S_occluded[f_start:f_end, t_start:t_end] = occlusion_value
         
         y_occluded = librosa.feature.inverse.mel_to_audio(
-            S_occluded, sr=sr, n_fft=2048, hop_length=512, fmax=sr//2
+            S_occluded, 
+            sr=sr, 
+            n_fft=n_fft, 
+            hop_length=hop_length, 
+            win_length=win_length,
+            n_iter=n_iter
         )
         
         if len(y_occluded) > len(y):
@@ -265,7 +299,11 @@ def compute_rise_map(
     predict_fn: Callable,
     sr: int = 44100,
     duration: int = 120,
+    n_fft: int = 2048,
+    hop_length: int = 512,
+    win_length: int = 2048,
     n_mels: int = 128,
+    n_iter: int = 256,
     n_masks: int = 500,
     mask_probability: float = 0.5,
     mask_size: float = 0.1,
@@ -280,6 +318,9 @@ def compute_rise_map(
     :param predict_fn: Function that takes waveform and sr, returns fake probability
     :param sr: Sample rate
     :param duration: Duration in seconds
+    :param n_fft: FFT size
+    :param hop_length: Hop length
+    :param win_length: Window length
     :param n_mels: Number of mel bands
     :param n_masks: Number of random masks (200-500 recommended)
     :param mask_probability: Probability of keeping each cell (0.5 = 50% masked)
@@ -292,8 +333,8 @@ def compute_rise_map(
     y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
     
     S = librosa.feature.melspectrogram(
-        y=y, sr=sr, n_mels=n_mels, n_fft=2048, 
-        hop_length=512, fmax=sr//2
+        y=y, sr=sr, n_mels=n_mels, n_fft=n_fft,
+        hop_length=hop_length, win_length=win_length, fmax=sr//2
     )
     S_db = librosa.power_to_db(S, ref=np.max)
     
@@ -332,7 +373,12 @@ def compute_rise_map(
         
         # Reconstruct audio
         y_masked = librosa.feature.inverse.mel_to_audio(
-            S_masked, sr=sr, n_fft=2048, hop_length=512, fmax=sr//2
+            S_masked, 
+            sr=sr, 
+            n_fft=n_fft, 
+            hop_length=hop_length,
+            win_length=win_length,
+            n_iter=n_iter
         )
         
         if len(y_masked) > len(y):
@@ -476,8 +522,13 @@ class SpectrogramExplainability:
         predictor,
         sr: int = 44100,
         duration: int = 120,
+        n_fft: int = 2048,
+        hop_length: int = 512,
+        win_length: int = 2048,
         n_mels: int = 128,
+        n_iter: int = 256,
         method: str = "rise",  # "rise" or "occlusion"
+        use_original_audio: bool = True,
         patch_size: Tuple[int, int] = (16, 16),
         stride: Tuple[int, int] = (8, 8),
         n_masks: int = 500,
@@ -489,12 +540,17 @@ class SpectrogramExplainability:
         self.predictor = predictor
         self.sr = sr
         self.duration = duration
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
         self.n_mels = n_mels
+        self.n_iter = n_iter
         self.method = method.lower()
         
         # Occlusion params
         self.patch_size = patch_size
         self.stride = stride
+        self.use_original_audio = use_original_audio
         
         # RISE params
         self.n_masks = n_masks
@@ -547,7 +603,11 @@ class SpectrogramExplainability:
                 predict_fn=self._predict_fn,
                 sr=self.sr,
                 duration=self.duration,
+                n_fft=self.n_fft,
+                hop_length=self.hop_length,
+                win_length=self.win_length,
                 n_mels=self.n_mels,
+                n_iter=self.n_iter,
                 n_masks=self.n_masks,
                 mask_probability=self.mask_probability,
                 baseline_threshold=baseline_threshold,
@@ -559,7 +619,11 @@ class SpectrogramExplainability:
                 predict_fn=self._predict_fn,
                 sr=self.sr,
                 duration=self.duration,
+                n_fft=self.n_fft,
+                hop_length=self.hop_length,
+                win_length=self.win_length,
                 n_mels=self.n_mels,
+                n_iter=self.n_iter,
                 patch_size=self.patch_size,
                 stride=self.stride,
                 baseline_threshold=baseline_threshold,
@@ -596,8 +660,8 @@ class SpectrogramExplainability:
         if importance_map is not None and self.method == 'occlusion':
             y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
             S = librosa.feature.melspectrogram(
-                y=y, sr=self.sr, n_mels=self.n_mels, n_fft=2048,
-                hop_length=512, fmax=self.sr // 2
+                y=y, sr=self.sr, n_mels=self.n_mels, n_fft=self.n_fft,
+                hop_length=self.hop_length, win_length=self.win_length, fmax=self.sr // 2
             )
 
             windows_dir = track_output_dir / "top_windows"
@@ -608,11 +672,14 @@ class SpectrogramExplainability:
                 S=S,
                 patch_importances=patch_importances,
                 sr=self.sr,
-                n_fft=2048,
-                hop_length=512,
+                n_fft=self.n_fft,
+                hop_length=self.hop_length,
+                win_length=self.win_length,
+                n_iter=self.n_iter,
                 top_n=5,
                 save_dir=windows_dir,
                 file_name=file_name,
+                use_original_audio=self.use_original_audio
             )
         else:
             pass

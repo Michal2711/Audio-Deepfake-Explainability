@@ -34,9 +34,11 @@ model:
 spectrogram:
   sr: 44100
   duration: 120
-  n_mels: 128
   n_fft: 2048
   hop_length: 512
+  win_length: 2048
+  n_mels: 512
+  n_iter: 256
 
 # Explainability method
 explainability:
@@ -50,8 +52,9 @@ explainability:
   
   # Occlusion parameters
   occlusion:
-    patch_size: [2048, 128]   # [time_frames, freq_bins]
-    stride: [2048, 128]       # [time_stride, freq_stride]
+    patch_size: [2048, 512]   # [time_frames, freq_bins]
+    stride: [2048, 512]       # [time_stride, freq_stride]
+    use_original_audio: false  # Whether to save original audio or reconstructed from melspectrogram (False if freq_bins != n_mels)
 
   # Smaller patch_size = more granular but slower
   # Suggestions:
@@ -66,7 +69,7 @@ explainability:
 # Output configuration
 output:
   result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
-  experiment_name: "Full_Freq_5_win"
+  experiment_name: "Full_Freq_5_win_reconstructed_saved"
   
 # Checkpoint
 checkpoint:
