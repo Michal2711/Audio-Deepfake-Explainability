@@ -128,10 +128,14 @@ def save_top_occlusion_patches_from_list(
                 n_iter=n_iter
             )
 
-            if len(y_window_full) >= window_samples:
-                y_window = y_window_full[:window_samples]
-            else:
-                y_window = np.pad(y_window_full, (0, window_samples - len(y_window_full)))
+            start_sample = int(t_start * hop_length)
+            start_sample = max(0, start_sample)
+            end_sample = int(start_sample + window_samples)
+            end_sample = min(end_sample, len(y_window_full))
+
+            y_window = y_window_full[start_sample:end_sample]
+            if len(y_window_full) < window_samples:
+                y_window_full = np.pad(y_window_full, (0, window_samples - len(y_window_full)))
 
         importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
