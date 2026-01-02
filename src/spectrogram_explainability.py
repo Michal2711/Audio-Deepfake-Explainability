@@ -60,7 +60,7 @@ class SpectrogramCheckpoint:
         with open(self.progress_log, 'a', encoding='utf-8') as f:
             f.write(f"[PROCESSED] {datetime.now().isoformat()} | {file_path}\n")
 
-def save_top_occlusion_patches_from_list(
+def _save_windows_for_group(
     y: np.ndarray,
     S: np.ndarray,
     patch_importances: list[dict],
@@ -70,23 +70,26 @@ def save_top_occlusion_patches_from_list(
     win_length: int,
     n_iter: int,
     top_n: int,
-    save_dir: Path | str,
+    base_save_dir: Path,
     file_name: str,
-    use_original_audio: bool = True
+    use_original_audio: bool,
+    group_name: str,
+    sort_reverse: bool
 ):
-    save_dir = Path(save_dir)
+    save_dir = base_save_dir / group_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
     sorted_patches = sorted(
         patch_importances,
         key=lambda p: abs(p["importance"]),
-        reverse=True
+        reverse=sort_reverse
     )
 
     top_patches = sorted_patches[:top_n]
 
     metadata = {
         "file_name": file_name,
+        "group": group_name,
         "top_n": int(len(top_patches)),
         "windows": []
     }
@@ -139,8 +142,8 @@ def save_top_occlusion_patches_from_list(
 
         importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
-        out_path = save_dir / (
-            f"{file_name}__top{rank}_patch_{importance_type}_"
+        out_path = base_save_dir / (
+            f"{file_name}__{group_name}{rank}_patch_{importance_type}_"
             f"{abs_importance:.3f}_t{t_start}-{t_end}_f{f_start}-{f_end}.wav"
         )
         sf.write(str(out_path), y_window, sr)
@@ -158,10 +161,60 @@ def save_top_occlusion_patches_from_list(
             "type": importance_type
         })
 
-    meta_path = save_dir.parent / f"{file_name}__top_occlusion_patches_from_list.json"
+    meta_path = base_save_dir / f"{file_name}__{group_name}_occlusion_patches_from_list.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
+def save_top_occlusion_patches_from_list(
+    y: np.ndarray,
+    S: np.ndarray,
+    patch_importances: list[dict],
+    sr: int,
+    n_fft: int,
+    hop_length: int,
+    win_length: int,
+    n_iter: int,
+    top_n: int,
+    save_dir: Path | str,
+    file_name: str,
+    use_original_audio: bool = True
+):
+    base_save_dir = Path(save_dir)
+    base_save_dir.mkdir(parents=True, exist_ok=True)
+
+    _save_windows_for_group(
+        y=y,
+        S=S,
+        patches=patch_importances,
+        sr=sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        n_iter=n_iter,
+        top_n=top_n,
+        base_save_dir=base_save_dir,
+        file_name=file_name,
+        use_original_audio=use_original_audio,
+        group_name="best",
+        sort_reverse=True
+    )
+
+    _save_windows_for_group(
+        y=y,
+        S=S,
+        patches=patch_importances,
+        sr=sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        n_iter=n_iter,
+        top_n=top_n,
+        base_save_dir=base_save_dir,
+        file_name=file_name,
+        use_original_audio=use_original_audio,
+        group_name="worst",
+        sort_reverse=False
+    )
 
 def compute_occlusion_map(
     audio_path: str,
