@@ -185,7 +185,7 @@ def save_top_occlusion_patches_from_list(
     _save_windows_for_group(
         y=y,
         S=S,
-        patches=patch_importances,
+        patch_importances=patch_importances,
         sr=sr,
         n_fft=n_fft,
         hop_length=hop_length,
@@ -202,7 +202,7 @@ def save_top_occlusion_patches_from_list(
     _save_windows_for_group(
         y=y,
         S=S,
-        patches=patch_importances,
+        patch_importances=patch_importances,
         sr=sr,
         n_fft=n_fft,
         hop_length=hop_length,
