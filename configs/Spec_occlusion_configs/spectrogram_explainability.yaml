@@ -40,7 +40,7 @@ spectrogram:
   n_mels: 512
   n_iter: 256
 
-# Explainability method
+# Explainability parameters
 explainability:
   method: "occlusion"  # "rise" or "occlusion"
   baseline_threshold: 0.00001  # Minimum prediction to process
@@ -52,8 +52,8 @@ explainability:
   
   # Occlusion parameters
   occlusion:
-    patch_size: [256, 512]   # [time_frames, freq_bins]
-    stride: [256, 512]       # [time_stride, freq_stride]
+    patch_size: [512, 512]   # [time_frames, freq_bins]
+    stride: [512, 512]       # [time_stride, freq_stride]
     use_original_audio: true  # Whether to save original audio or reconstructed from melspectrogram (False if freq_bins != n_mels)
 
   # Smaller patch_size = more granular but slower
@@ -69,7 +69,7 @@ explainability:
 # Output configuration
 output:
   result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
-  experiment_name: "FULL_Occlusion_UDIO"
+  experiment_name: "FULL_Occlusion_UDIO_512_512"
   
 # Checkpoint
 checkpoint:
