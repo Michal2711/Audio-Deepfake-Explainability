@@ -189,6 +189,7 @@ def main():
             win_length=spectrogram_cfg.get('win_length', 2048),
             n_mels=spectrogram_cfg.get('n_mels', 128),
             n_iter=spectrogram_cfg.get('n_iter', 256),
+            top_n_windows=occlusion_cfg.get('top_n_windows', 5),
             method='occlusion',
             use_original_audio=occlusion_cfg.get('use_original_audio', True),
             patch_size=tuple(occlusion_cfg.get('patch_size', [32, 32])),

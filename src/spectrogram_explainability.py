@@ -74,7 +74,8 @@ def _save_windows_for_group(
     file_name: str,
     use_original_audio: bool,
     group_name: str,
-    sort_reverse: bool
+    sort_reverse: bool,
+    save_audio: bool = True
 ):
     save_dir = base_save_dir / group_name
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -142,11 +143,12 @@ def _save_windows_for_group(
 
         importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
-        out_path = save_dir / (
-            f"{file_name}__{group_name}{rank}_patch_{importance_type}_"
-            f"{abs_importance:.3f}_t{t_start}-{t_end}_f{f_start}-{f_end}.wav"
-        )
-        sf.write(str(out_path), y_window, sr)
+        if save_audio:
+            out_path = save_dir / (
+                f"{file_name}__{group_name}{rank}_patch_{importance_type}_"
+                f"{abs_importance:.3f}_t{t_start}-{t_end}_f{f_start}-{f_end}.wav"
+            )
+            sf.write(str(out_path), y_window, sr)
 
         metadata["windows"].append({
             "rank": int(rank),
@@ -182,6 +184,26 @@ def save_top_occlusion_patches_from_list(
     base_save_dir = Path(save_dir)
     base_save_dir.mkdir(parents=True, exist_ok=True)
 
+    # All patches
+    _save_windows_for_group(
+        y=y,
+        S=S,
+        patch_importances=patch_importances,
+        sr=sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        n_iter=n_iter,
+        top_n=len(patch_importances),
+        base_save_dir=base_save_dir,
+        file_name=file_name,
+        use_original_audio=use_original_audio,
+        group_name="all",
+        sort_reverse=True,
+        save_audio=False
+    )
+
+    # Highest importance patches
     _save_windows_for_group(
         y=y,
         S=S,
@@ -196,9 +218,11 @@ def save_top_occlusion_patches_from_list(
         file_name=file_name,
         use_original_audio=use_original_audio,
         group_name="best",
-        sort_reverse=True
+        sort_reverse=True,
+        save_audio=True
     )
 
+    # Lowest importance patches
     _save_windows_for_group(
         y=y,
         S=S,
@@ -213,7 +237,37 @@ def save_top_occlusion_patches_from_list(
         file_name=file_name,
         use_original_audio=use_original_audio,
         group_name="worst",
-        sort_reverse=False
+        sort_reverse=False,
+        save_audio=True
+    )
+
+    positives = [p for p in patch_importances if p["importance"] > 0]
+    negatives = [p for p in patch_importances if p["importance"] < 0]
+
+    positives_sorted = sorted(positives, key=lambda p: p["importance"], reverse=True)
+    negatives_sorted = sorted(negatives, key=lambda p: p["importance"], reverse=False)
+
+    top_pos = positives_sorted[:top_n]
+    top_neg = negatives_sorted[:top_n]
+
+    most_influential = top_pos + top_neg
+
+    _save_windows_for_group(
+        y=y,
+        S=S,
+        patch_importances=most_influential,
+        sr=sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        n_iter=n_iter,
+        top_n=len(most_influential),
+        base_save_dir=base_save_dir,
+        file_name=file_name,
+        use_original_audio=use_original_audio,
+        group_name="most_influencial",
+        sort_reverse=False,
+        save_audio=True
     )
 
 def compute_occlusion_map(
@@ -584,6 +638,7 @@ class SpectrogramExplainability:
         win_length: int = 2048,
         n_mels: int = 128,
         n_iter: int = 256,
+        top_n_windows: int = 5,
         method: str = "rise",  # "rise" or "occlusion"
         use_original_audio: bool = True,
         patch_size: Tuple[int, int] = (16, 16),
@@ -602,6 +657,7 @@ class SpectrogramExplainability:
         self.win_length = win_length
         self.n_mels = n_mels
         self.n_iter = n_iter
+        self.top_n_windows = top_n_windows
         self.method = method.lower()
         
         # Occlusion params
@@ -733,7 +789,7 @@ class SpectrogramExplainability:
                 hop_length=self.hop_length,
                 win_length=self.win_length,
                 n_iter=self.n_iter,
-                top_n=5,
+                top_n=self.top_n_windows,
                 save_dir=windows_dir,
                 file_name=file_name,
                 use_original_audio=self.use_original_audio
