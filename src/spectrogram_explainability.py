@@ -142,7 +142,7 @@ def _save_windows_for_group(
 
         importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
-        out_path = base_save_dir / (
+        out_path = save_dir / (
             f"{file_name}__{group_name}{rank}_patch_{importance_type}_"
             f"{abs_importance:.3f}_t{t_start}-{t_end}_f{f_start}-{f_end}.wav"
         )
@@ -161,7 +161,7 @@ def _save_windows_for_group(
             "type": importance_type
         })
 
-    meta_path = base_save_dir / f"{file_name}__{group_name}_occlusion_patches_from_list.json"
+    meta_path = save_dir / f"{file_name}__{group_name}_occlusion_patches_from_list.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
