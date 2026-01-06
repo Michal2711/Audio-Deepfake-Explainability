@@ -209,7 +209,8 @@ def main():
             models_to_process=dataset_cfg.get('models_to_process'),
             max_samples_per_model=dataset_cfg.get('max_samples_per_model'),
             baseline_threshold=baseline_threshold,
-            resume=args.resume or (not args.no_checkpoint)
+            resume=args.resume or (not args.no_checkpoint),
+            results_path=output_dir / f"spectrogram_results_{method}.json"
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Experiment interrupted (Ctrl+C)")

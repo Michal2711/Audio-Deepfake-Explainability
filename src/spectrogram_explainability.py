@@ -625,6 +625,40 @@ def visualize_spectrogram_saliency(
     plt.close()
     print(f"✅ Saved: {output_path}")
 
+def append_update_spectrogram_results(
+    new_results: dict,
+    results_path: Path,
+) -> None:
+    """
+    Structure:
+    {
+        "ModelA": {
+            "file1": { ...result... },
+            "file2": { ... }
+        },
+        "ModelB": { ... }
+    }
+    """
+    merged: dict = {}
+
+    if results_path.exists():
+        try:
+            with open(results_path, "r", encoding="utf-8") as f:
+                merged = json.load(f)
+        except Exception:
+            print(f"⚠️ Warning: could not read existing spectrogram results from {results_path}")
+            merged = {}
+
+    for model_name, files_dict in new_results.items():
+        if model_name not in merged:
+            merged[model_name] = {}
+        for file_key, data in files_dict.items():
+            merged[model_name][file_key] = data
+
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=4, ensure_ascii=False)
+
 class SpectrogramExplainability:
     """Main class for spectrogram-based explainability experiments"""
     
@@ -822,7 +856,8 @@ class SpectrogramExplainability:
         models_to_process: Optional[list] = None,
         max_samples_per_model: Optional[int] = None,
         baseline_threshold: float = 0.3,
-        resume: bool = True
+        resume: bool = True,
+        results_path: Optional[str | Path] = None
     ) -> pd.DataFrame:
         """
         Run spectrogram explainability experiment on dataset.
@@ -839,6 +874,10 @@ class SpectrogramExplainability:
         base_path = Path(base_path)
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        if results_path is None:
+            results_path = output_dir / "spectrogram_explainability_results.json"
+        results_path = Path(results_path)
 
         saliency_dir = output_dir / "saliency_maps"
         saliency_dir.mkdir(parents=True, exist_ok=True)
@@ -896,6 +935,21 @@ class SpectrogramExplainability:
                     
                     if result:
                         results.append(result)
+
+                        if results_path:
+                            model_name = result['folder']
+                            file_key = result['file_name']
+
+                            wrapper = {
+                                model_name: {
+                                    file_key: result
+                                }
+                            }
+
+                            append_update_spectrogram_results(
+                                new_results=wrapper,
+                                results_path=results_path
+                            )
 
                         if len(results) % tmp_save_freq == 0:
                             pd.DataFrame(results).to_csv(tmp_file, index=False)

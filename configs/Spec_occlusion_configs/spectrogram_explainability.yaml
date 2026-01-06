@@ -7,9 +7,9 @@ dataset:
     # - UDIO
     # - SUNO
     # - SUNO_PRO
-    # - ElevenLabs
+    - ElevenLabs
     - REAL
-  max_samples_per_model: 1
+  max_samples_per_model: 3
 
 # Model configuration  
 model:
@@ -70,7 +70,7 @@ explainability:
 # Output configuration
 output:
   result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
-  experiment_name: "FULL_Occlusion_REAL_2048_512"
+  experiment_name: "FULL_Occlusion_with_all_results_saved_v2"
   
 # Checkpoint
 checkpoint:
