@@ -2,14 +2,14 @@
 
 # Dataset configuration
 dataset:
-  base_path: "Data/FakeRealMusicOriginal"
+  base_path: "Data/FakeRealMusicOriginalNormalized/minus14/mp3_192"
   models_to_process:
-    # - UDIO
-    # - SUNO
-    # - SUNO_PRO
+    - UDIO
+    - SUNO
+    - SUNO_PRO
     - ElevenLabs
     - REAL
-  max_samples_per_model: 3
+  max_samples_per_model: 10
 
 # Model configuration  
 model:
@@ -52,10 +52,10 @@ explainability:
   
   # Occlusion parameters
   occlusion:
-    patch_size: [2048, 512]   # [time_frames, freq_bins]
-    stride: [2048, 512]       # [time_stride, freq_stride]
+    patch_size: [512, 512]   # [time_frames, freq_bins]
+    stride: [512, 512]       # [time_stride, freq_stride]
     use_original_audio: true  # Whether to save original audio or reconstructed from melspectrogram (False if freq_bins != n_mels)
-    top_n_windows: 2          # Number of most important occluded windows to save
+    top_n_windows: 5          # Number of most important occluded windows to save
 
   # Smaller patch_size = more granular but slower
   # Suggestions:
@@ -69,8 +69,8 @@ explainability:
 
 # Output configuration
 output:
-  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
-  experiment_name: "FULL_Occlusion_with_all_results_saved_v2"
+  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus14/mp3_192/Occlusion"
+  experiment_name: "Full_Occlusion_512_512_all_models"
   
 # Checkpoint
 checkpoint:

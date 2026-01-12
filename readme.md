@@ -39,4 +39,7 @@ python scripts/run_LIME_experiment.py --resume
 -- Occlusion
 
 # Użyj własnej konfiguracji
-python .\scripts\run_spectrogram_experiment.py --config configs/Spec_occlusion_configs/spectrogram_explainability.yaml
+python .\scripts\run_spectrogram_experiment.py --config .\configs\Spec_occlusion_configs\spectrogram_explainability.yaml
+
+# Oblicz cechy fizyczne wyników Occlusion
+python .\scripts\run_occlusion_patch_features.py --config .\configs\Spec_occlusion_configs\occlusion_patch_features.yaml
