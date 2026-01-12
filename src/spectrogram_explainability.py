@@ -607,7 +607,7 @@ def visualize_spectrogram_saliency(
         cmap='seismic', alpha=alpha_mask,
         vmin=-fullmap_absmax, vmax=fullmap_absmax, interpolation='none'
     )
-    axes[3].set_title(f'Spectrogram + Saliency\nHighlighted: {maskinfo} (alpha=1 core, 0.25 tło)', fontsize=13, fontweight='bold')
+    axes[3].set_title(f'Spectrogram + Saliency\nHighlighted: {maskinfo} (alpha=1 core, 0.25 background)', fontsize=13, fontweight='bold')
     axes[3].set_ylabel('Mel Bin', fontsize=11)
     axes[3].set_xlabel('Time Frame', fontsize=11)
 

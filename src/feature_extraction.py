@@ -273,10 +273,11 @@ def compute_shimmer_extended(y, sr):
 
 
 def compute_intonation_pattern(y, sr, f0=None):
-    times = librosa.times_like(f0, sr=sr)
+    # times = librosa.times_like(f0, sr=sr)
     f0 = np.nan_to_num(f0, nan=0.0)
     pitch_var = np.std(f0)
-    return {'f0_contour': f0.tolist(), 'pitch_variability': float(pitch_var), 'times': times.tolist()}
+    # return {'f0_contour': f0.tolist(), 'pitch_variability': float(pitch_var), 'times': times.tolist()}
+    return {'pitch_variability': float(pitch_var)}
 
 def detect_voice_breaks(y, sr, threshold=0.1, min_duration_ms=50):
     frame_length = int(0.02 * sr)
@@ -315,11 +316,11 @@ def compute_rhythm_stats(audio, sr=44100):
     
     avg_onset_strength = np.mean(onset_env)
     max_onset_strength = np.max(onset_env)
-    beats_times = librosa.frames_to_time(beats, sr=sr)
+    # beats_times = librosa.frames_to_time(beats, sr=sr)
     
     return {
         "tempo_bpm": tempo,
         "avg_onset_strength": avg_onset_strength,
-        "max_onset_strength": max_onset_strength,
-        "beats_times": beats_times.tolist()
+        "max_onset_strength": max_onset_strength
+        # "beats_times": beats_times.tolist()
     }
