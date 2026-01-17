@@ -265,7 +265,7 @@ def save_top_occlusion_patches_from_list(
         base_save_dir=base_save_dir,
         file_name=file_name,
         use_original_audio=use_original_audio,
-        group_name="most_influencial",
+        group_name="most_influential",
         sort_reverse=False,
         save_audio=True
     )

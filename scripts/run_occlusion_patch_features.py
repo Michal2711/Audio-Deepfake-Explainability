@@ -132,7 +132,7 @@ def main():
                     feats = extract_all_features(y, sr)
 
                     feats_with_meta = dict(feats)
-                    feats_with_meta["occlusion_meta"] = {
+                    occlusion_meta = {
                         "group": group,
                         "rank": int(rank),
                         "importance": float(importance),
@@ -155,7 +155,8 @@ def main():
                     )
                     patch_id = f"{group}_rank{rank}"
                     track_entry["patches"][patch_id] = {
-                        "features": feats_with_meta
+                        "features": feats_with_meta,
+                        "occlusion_meta": occlusion_meta,
                     }
 
     features_path = output_root / "occlusion_patches_features.json"
