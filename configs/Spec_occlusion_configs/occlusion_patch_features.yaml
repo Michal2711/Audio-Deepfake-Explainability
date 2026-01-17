@@ -1,10 +1,10 @@
 dataset:
   # dictionary with results of occlusion explainability experiment
-  occlusion_result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus14/mp3_192/Occlusion/Full_Occlusion_512_512_all_models"
+  occlusion_result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus23/base/Occlusion/Full_Occlusion_512_512_all_models"
 
 output:
   # dictionary where to save extracted features from occlusion patches
-  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus14/mp3_192/Occlusion/Full_Occlusion_512_512_all_models/occlusion_features"
+  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus23/base/Occlusion/Full_Occlusion_512_512_all_models/occlusion_features"
   experiment_name: "occlusion_patches"
 
 audio:
