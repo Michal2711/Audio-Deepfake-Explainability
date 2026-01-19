@@ -18,8 +18,22 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
+from typing import NamedTuple
 
+class OcclusionResult(NamedTuple):
+    importance_map: Optional[np.ndarray]
+    spectrogram_db: np.ndarray
+    baseline_pred: float
+    y: np.ndarray
+    S: np.ndarray
+    patch_importances: Optional[list[dict]]
 
+class RiseResult(NamedTuple):
+    importance_map: Optional[np.ndarray]
+    spectrogram_db: np.ndarray
+    baseline_pred: float
+    y: np.ndarray
+    S: np.ndarray
 class SpectrogramCheckpoint:
     """
         Manages checkpointing for spectrogram experiments
@@ -95,7 +109,15 @@ def _save_windows_for_group(
         "windows": []
     }
 
-    for rank, p in enumerate(top_patches, 1):
+    pbar = tqdm(
+        top_patches,
+        desc=f"    Saving {group_name} ({file_name})",
+        unit="win",
+        ncols=100,
+        leave=False
+    )
+
+    for rank, p in enumerate(pbar, 1):
         t_start = p["t_start"]
         t_end = p["t_end"]
         f_start = p["f_start"]
@@ -106,8 +128,8 @@ def _save_windows_for_group(
         window_frames = t_end - t_start
         window_samples = max(1, window_frames * hop_length)
 
-        masked_S = np.zeros_like(S)
-        masked_S[f_start:f_end, t_start:t_end] = S[f_start:f_end, t_start:t_end]
+        # masked_S = np.zeros_like(S)
+        # masked_S[f_start:f_end, t_start:t_end] = S[f_start:f_end, t_start:t_end]
 
         if use_original_audio:
             start_sample = int(t_start * hop_length)
@@ -162,6 +184,8 @@ def _save_windows_for_group(
             "abs_importance": abs_importance,
             "type": importance_type
         })
+
+    pbar.close()
 
     meta_path = save_dir / f"{file_name}__{group_name}_occlusion_patches_from_list.json"
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -285,7 +309,7 @@ def compute_occlusion_map(
     occlusion_value: float = 0.0,
     baseline_threshold: float = 0.3,
     verbose: bool = True
-) -> Tuple[Optional[np.ndarray], np.ndarray, float]:
+) -> OcclusionResult:
     """
     Generate occlusion-based saliency map for audio spectrogram.
     
@@ -302,7 +326,7 @@ def compute_occlusion_map(
     :param occlusion_value: Value to use for occlusion (0.0 = silence)
     :param baseline_threshold: Only compute if baseline pred > threshold
     :param verbose: Print progress
-    :return: (importance_map, spectrogram_db, baseline_prediction)
+    :return: (importance_map, spectrogram_db, baseline_pred, patch_importances, y, S)
     """
     
     y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
@@ -320,7 +344,14 @@ def compute_occlusion_map(
     if baseline_pred < baseline_threshold:
         if verbose:
             print(f"    ⏭️  Baseline too low ({baseline_pred:.4f}), skipping...")
-        return None, S_db, baseline_pred
+        return OcclusionResult(
+                importance_map=None, 
+                spectrogram_db=S_db, 
+                baseline_pred=baseline_pred, 
+                patch_importances=None, 
+                y=y, 
+                S=S
+            )
     
     n_freq, n_time = S.shape
     importance_map = np.zeros((n_freq, n_time))
@@ -350,12 +381,16 @@ def compute_occlusion_map(
     importance_values = []
     patch_importances = []
 
+    S_occluded = S.copy()
+
     for t_start, f_start in pbar:
-        S_occluded = S.copy()
+        # S_occluded = S.copy()
         
         t_end = min(t_start + patch_size[0], n_time)
         f_end = min(f_start + patch_size[1], n_freq)
         
+        original_patch = S_occluded[f_start:f_end, t_start:t_end].copy()
+
         S_occluded[f_start:f_end, t_start:t_end] = occlusion_value
         
         y_occluded = librosa.feature.inverse.mel_to_audio(
@@ -367,6 +402,8 @@ def compute_occlusion_map(
             n_iter=n_iter
         )
         
+        S_occluded[f_start:f_end, t_start:t_end] = original_patch
+
         if len(y_occluded) > len(y):
             y_occluded = y_occluded[:len(y)]
         elif len(y_occluded) < len(y):
@@ -403,7 +440,14 @@ def compute_occlusion_map(
         print(f"    ✅ Completed | Mean importance: {importance_map.mean():.4f}, "
               f"Max: {importance_map.max():.4f}")
     
-    return importance_map, S_db, baseline_pred, patch_importances
+    return OcclusionResult(
+            importance_map=importance_map, 
+            spectrogram_db=S_db, 
+            baseline_pred=baseline_pred, 
+            patch_importances=patch_importances, 
+            y=y, 
+            S=S
+        )
 
 def compute_rise_map(
     audio_path: str,
@@ -420,7 +464,7 @@ def compute_rise_map(
     mask_size: float = 0.1,
     baseline_threshold: float = 0.3,
     verbose: bool = True
-) -> Tuple[Optional[np.ndarray], np.ndarray, float]:
+) -> RiseResult:
     """
     RISE (Randomized Input Sampling for Explanation).
     Much faster than occlusion - uses random masks instead of sliding window.
@@ -438,7 +482,7 @@ def compute_rise_map(
     :param mask_size: NOT USED (kept for compatibility)
     :param baseline_threshold: Minimum baseline prediction to process
     :param verbose: Print progress
-    :return: (importance_map, spectrogram_db, baseline_prediction)
+    :return: (importance_map, spectrogram_db, baseline_pred, y, S)
     """
     
     y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
@@ -456,7 +500,7 @@ def compute_rise_map(
     if baseline_pred < baseline_threshold:
         if verbose:
             print(f"    ⏭️  Baseline too low ({baseline_pred:.4f}), skipping...")
-        return None, S_db, baseline_pred
+        return RiseResult(importance_map=None, spectrogram_db=S_db, baseline_pred=baseline_pred, y=y, S=S)
     
     n_freq, n_time = S.shape
     
@@ -524,7 +568,7 @@ def compute_rise_map(
         print(f"    ✅ Completed | Mean importance: {importance_map.mean():.4f}, "
               f"Max: {importance_map.max():.4f}")
     
-    return importance_map, S_db, baseline_pred
+    return RiseResult(importance_map=importance_map, spectrogram_db=S_db, baseline_pred=baseline_pred, y=y, S=S)
 
 def visualize_spectrogram_saliency(
     importance_map: np.ndarray,
@@ -592,7 +636,7 @@ def visualize_spectrogram_saliency(
     # Rescale importance_map to [0, 1] for alpha (optionally: only for selected core)
     scaled_alpha = 0.20 + 0.55 * (np.abs(importance_map) / np.max(np.abs(importance_map)))  # 0.2 background, up to 0.75
 
-    if abs_threshold or highlight_percent:
+    if abs_threshold is not None or highlight_percent is not None:
         is_core = mask
         alpha_mask = np.zeros_like(importance_map, dtype=float) + 0.20
         alpha_mask[is_core] = 0.65
@@ -745,7 +789,7 @@ class SpectrogramExplainability:
                 return None
         
         if self.method == "rise":
-            importance_map, spectrogram_db, baseline_pred = compute_rise_map(
+            result = compute_rise_map(
                 audio_path=audio_path,
                 predict_fn=self._predict_fn,
                 sr=self.sr,
@@ -761,7 +805,7 @@ class SpectrogramExplainability:
                 verbose=True
             )
         else:
-            importance_map, spectrogram_db, baseline_pred, patch_importances = compute_occlusion_map(
+            result = compute_occlusion_map(
                 audio_path=audio_path,
                 predict_fn=self._predict_fn,
                 sr=self.sr,
@@ -777,7 +821,7 @@ class SpectrogramExplainability:
                 verbose=True
             )
         
-        if importance_map is None:
+        if result.importance_map is None:
             if self.checkpoint:
                 self.checkpoint.mark_as_processed(str(audio_path))
             return None
@@ -795,29 +839,32 @@ class SpectrogramExplainability:
         method_name = "RISE" if self.method == "rise" else "Occlusion"
         
         visualize_spectrogram_saliency(
-            importance_map=importance_map,
-            spectrogram_db=spectrogram_db,
+            importance_map=result.importance_map,
+            spectrogram_db=result.spectrogram_db,
             output_path=str(output_path),
-            title=f"{file_name} | {method_name} | Pred: {baseline_pred:.3f}",
+            title=f"{file_name} | {method_name} | Pred: {result.baseline_pred:.3f}",
             sr=self.sr,
             highlight_percent=self.highlight_percent,
             abs_threshold=self.abs_threshold
         )
 
-        if importance_map is not None and self.method == 'occlusion':
-            y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
-            S = librosa.feature.melspectrogram(
-                y=y, sr=self.sr, n_mels=self.n_mels, n_fft=self.n_fft,
-                hop_length=self.hop_length, win_length=self.win_length, fmax=self.sr // 2
-            )
-
+        if result.importance_map is not None and self.method == 'occlusion':
+            if result.y is not None and result.S is not None:
+                y = result.y
+                S = result.S
+            else:
+                y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
+                S = librosa.feature.melspectrogram(
+                    y=y, sr=self.sr, n_mels=self.n_mels, n_fft=self.n_fft,
+                    hop_length=self.hop_length, win_length=self.win_length, fmax=self.sr // 2
+                )
             windows_dir = track_output_dir / "top_windows"
             windows_dir.mkdir(exist_ok=True)
 
             save_top_occlusion_patches_from_list(
                 y=y,
                 S=S,
-                patch_importances=patch_importances,
+                patch_importances=result.patch_importances,
                 sr=self.sr,
                 n_fft=self.n_fft,
                 hop_length=self.hop_length,
@@ -839,13 +886,13 @@ class SpectrogramExplainability:
             'file_name': file_name,
             'folder': folder_name,
             'method': self.method,
-            'baseline_pred': float(baseline_pred),
-            'mean_importance': float(importance_map.mean()),
-            'max_importance': float(importance_map.max()),
-            'min_importance': float(importance_map.min()),
-            'std_importance': float(importance_map.std()),
-            'p90_importance': float(np.percentile(importance_map, 90)),
-            'p10_importance': float(np.percentile(importance_map, 10)),
+            'baseline_pred': float(result.baseline_pred),
+            'mean_importance': float(result.importance_map.mean()),
+            'max_importance': float(result.importance_map.max()),
+            'min_importance': float(result.importance_map.min()),
+            'std_importance': float(result.importance_map.std()),
+            'p90_importance': float(np.percentile(result.importance_map, 90)),
+            'p10_importance': float(np.percentile(result.importance_map, 10)),
         }
 
     
