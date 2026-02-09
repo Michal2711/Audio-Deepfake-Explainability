@@ -1,0 +1,105 @@
+# Paths
+dataset:
+  base_path: "Data/FakeRealMusicOriginal"
+  models_to_process:
+    - UDIO
+    - SUNO
+    - SUNO_PRO
+    - ElevenLabs
+    - REAL
+  max_samples_per_model: 10
+
+model:
+  local: false
+  local_model: "awsaf49/sonics-spectttra-alpha-120s"
+  device: "cuda"
+  remote_space: "awsaf49/sonics-fake-song-detection"
+  remote_model_type: "SpecTTTra-α" # SpecTTTra-γ: Optimized for speed
+                                  # SpecTTTra-β: Balanced performance
+                                  # SpecTTTra-α: Highest accuracy
+  model_time: 120
+  retry:
+    max_retries: 10
+    initial_delay: 3.0
+    max_delay: 120.0
+  remote_api_name: "/predict"
+
+bands:
+  # Choices of bands preset and attenuation parameters
+  preset: "default"   # default | detailed_voice | high_resolution
+
+  # Leaving some energy in the band (0.0 = mute; 1.0 = no change)
+  attenuation: 0.25
+
+  # Transition definition (edge smoothing)
+  transition:
+    mode: "rel"        # "abs" (Hz) or "rel" (fraction of band width)
+    rel: 0.2           # 20% of band width
+    min_hz: 5.0
+    max_hz: 500.0
+    hz: 200.0          # used when mode == "abs"
+
+  # Band presets (Hz)
+  presets:
+    default:
+      - [20, 100]
+      - [100, 250]
+      - [250, 2000]
+      - [2000, 4000]
+      - [4000, 8000]
+      - [8000, 16000]
+    detailed_voice:
+      - [20, 60]
+      - [60, 250]
+      - [250, 500]
+      - [500, 2000]
+      - [2000, 4000]
+      - [4000, 6000]
+      - [6000, 12000]
+      - [12000, 21000]
+    high_resolution:
+      - [20, 60]
+      - [60, 100]
+      - [100, 250]
+      - [250, 500]
+      - [500, 1000]
+      - [1000, 2000]
+      - [2000, 4000]
+      - [4000, 6000]
+      - [6000, 8000]
+      - [8000, 10000]
+      - [10000, 12000]
+      - [12000, 16000]
+      - [16000, 21000]
+
+spectrogram:
+  sr: 44100
+  duration: 120
+
+  # Mel spectrogram parameters
+  use_mel: false
+  n_mels: 512
+
+  # STFT
+  n_fft: 2048
+  hop_length: 512
+  win_length: 2048
+  n_iter: 256
+
+explainability:
+  # Source separation (Spleeter)
+  use_separation: false
+  separation_model: "spleeter:4stems" # Options: "spleeter:2stems", "spleeter:4stems", "spleeter:5stems"
+  separation_targets: ['vocals0', 'drums0', 'bass0', 'other0'] # Depends on the model used
+
+  # Normalization of loudness after iSTFT
+  normalize_loudness: false
+  lufs: -14
+
+output:
+  result_path: "results/FBP/FakeRealMusicOriginal/"
+  experiment_name: "FULL_TEST2"
+
+# Checkpoint
+checkpoint:
+  enabled: true
