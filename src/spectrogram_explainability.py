@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Callable, Tuple, Optional, Dict, Any
 from datetime import datetime
@@ -20,6 +21,32 @@ import seaborn as sns
 from tqdm import tqdm
 from typing import NamedTuple
 
+# def timer(name: str = ""):
+#     """Simple timer decorator for functions"""
+#     def decorator(func):
+#         @wraps(func)
+#         def wrapper(*args, **kwargs):
+#             start_time = time.time()
+#             result = func(*args, **kwargs)
+#             elapsed = time.time() - start_time
+#             print(f"⏱️  {name or func.__name__} completed in {elapsed:.2f} seconds")
+#             return result
+#         return wrapper
+#     return decorator
+
+class Timer:
+    def __init__(self, name: str = ""):
+        self.name = name
+        self.start_time = None
+
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+    
+    def __exit__(self, *args):
+        elapsed = time.time() - self.start_time
+        print(f"⏱️  {self.name or 'Timer'} completed in {elapsed:.2f} seconds")
+
 class OcclusionResult(NamedTuple):
     importance_map: Optional[np.ndarray]
     spectrogram_db: np.ndarray
@@ -34,6 +61,7 @@ class RiseResult(NamedTuple):
     baseline_pred: float
     y: np.ndarray
     S: np.ndarray
+    
 class SpectrogramCheckpoint:
     """
         Manages checkpointing for spectrogram experiments
@@ -141,7 +169,7 @@ def _save_windows_for_group(
             if len(y_window) < window_samples:
                 y_window = np.pad(y_window, (0, window_samples - len(y_window)))
 
-        else:
+        if not use_original_audio and save_audio:
             masked_S = np.zeros_like(S)
             masked_S[f_start:f_end, t_start:t_end] = S[f_start:f_end, t_start:t_end]
 
@@ -329,15 +357,17 @@ def compute_occlusion_map(
     :return: (importance_map, spectrogram_db, baseline_pred, patch_importances, y, S)
     """
     
-    y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
+    with Timer("Loading audio and computing spectrogram"):
+        y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
 
-    S = librosa.feature.melspectrogram(
-        y=y, sr=sr, n_mels=n_mels, n_fft=n_fft, 
-        hop_length=hop_length, win_length=win_length, fmax=sr//2
-    )
-    S_db = librosa.power_to_db(S, ref=np.max)
+        S = librosa.feature.melspectrogram(
+            y=y, sr=sr, n_mels=n_mels, n_fft=n_fft, 
+            hop_length=hop_length, win_length=win_length, fmax=sr//2
+        )
+        S_db = librosa.power_to_db(S, ref=np.max)
 
-    baseline_pred = predict_fn(y, sr)
+    with Timer("Computing baseline prediction"):
+        baseline_pred = predict_fn(y, sr)
     if verbose:
         print(f"    Baseline prediction: {baseline_pred:.4f}")
     
@@ -383,56 +413,58 @@ def compute_occlusion_map(
 
     S_occluded = S.copy()
 
-    for t_start, f_start in pbar:
-        # S_occluded = S.copy()
-        
-        t_end = min(t_start + patch_size[0], n_time)
-        f_end = min(f_start + patch_size[1], n_freq)
-        
-        original_patch = S_occluded[f_start:f_end, t_start:t_end].copy()
+    with Timer("Processing patches"):
+        for t_start, f_start in pbar:
+            # S_occluded = S.copy()
+            
+            t_end = min(t_start + patch_size[0], n_time)
+            f_end = min(f_start + patch_size[1], n_freq)
+            
+            original_patch = S_occluded[f_start:f_end, t_start:t_end].copy()
 
-        S_occluded[f_start:f_end, t_start:t_end] = occlusion_value
-        
-        y_occluded = librosa.feature.inverse.mel_to_audio(
-            S_occluded, 
-            sr=sr, 
-            n_fft=n_fft, 
-            hop_length=hop_length, 
-            win_length=win_length,
-            n_iter=n_iter
-        )
-        
-        S_occluded[f_start:f_end, t_start:t_end] = original_patch
+            S_occluded[f_start:f_end, t_start:t_end] = occlusion_value
+            
+            with Timer("Inverting mel spectrogram to audio"):
+                y_occluded = librosa.feature.inverse.mel_to_audio(
+                    S_occluded, 
+                    sr=sr, 
+                    n_fft=n_fft, 
+                    hop_length=hop_length, 
+                    win_length=win_length,
+                    n_iter=n_iter
+                )
+            
+            S_occluded[f_start:f_end, t_start:t_end] = original_patch
 
-        if len(y_occluded) > len(y):
-            y_occluded = y_occluded[:len(y)]
-        elif len(y_occluded) < len(y):
-            y_occluded = np.pad(y_occluded, (0, len(y) - len(y_occluded)))
-        
-        occluded_pred = predict_fn(y_occluded, sr)
-        
-        importance = baseline_pred - occluded_pred
-        importance_values.append(importance)
+            if len(y_occluded) > len(y):
+                y_occluded = y_occluded[:len(y)]
+            elif len(y_occluded) < len(y):
+                y_occluded = np.pad(y_occluded, (0, len(y) - len(y_occluded)))
+            
+            occluded_pred = predict_fn(y_occluded, sr)
+            
+            importance = baseline_pred - occluded_pred
+            importance_values.append(importance)
 
-        patch_importances.append({
-            "t_start": int(t_start),
-            "t_end": int(t_end),
-            "f_start": int(f_start),
-            "f_end": int(f_end),
-            "importance": importance
-        })
-        
-        importance_map[f_start:f_end, t_start:t_end] += importance
-        count_map[f_start:f_end, t_start:t_end] += 1
-        
-        if len(importance_values) > 0:
-            mean_imp = np.mean(importance_values[-10:])
-            pbar.set_postfix({
-                'imp': f'{importance:+.3f}',
-                'avg': f'{mean_imp:+.3f}'
+            patch_importances.append({
+                "t_start": int(t_start),
+                "t_end": int(t_end),
+                "f_start": int(f_start),
+                "f_end": int(f_end),
+                "importance": importance
             })
+            
+            importance_map[f_start:f_end, t_start:t_end] += importance
+            count_map[f_start:f_end, t_start:t_end] += 1
+            
+            if len(importance_values) > 0:
+                mean_imp = np.mean(importance_values[-10:])
+                pbar.set_postfix({
+                    'imp': f'{importance:+.3f}',
+                    'avg': f'{mean_imp:+.3f}'
+                })
     
-    pbar.close()
+        pbar.close()
     
     importance_map = importance_map / (count_map + 1e-8)
     
@@ -936,6 +968,7 @@ class SpectrogramExplainability:
         print(f"📊 Output: {output_dir}")
         print(f"🗺️  Saliency maps: {saliency_dir}")
         print(f"🔧 Method: {self.method.upper()}")
+
         if self.method == 'rise':
             print(f"   RISE masks: {self.n_masks}")
         else:
