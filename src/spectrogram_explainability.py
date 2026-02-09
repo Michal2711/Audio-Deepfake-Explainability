@@ -360,6 +360,16 @@ def compute_occlusion_map(
     with Timer("Loading audio and computing spectrogram"):
         y, _ = librosa.load(audio_path, sr=sr, duration=duration, mono=True)
 
+        # if self.use_mel:
+        #     S = librosa.feature.melspectrogram(
+        #         y=y, sr=sr, n_mels=n_mels, n_fft=n_fft, 
+        #         hop_length=hop_length, win_length=win_length, fmax=sr//2
+        #     )
+        #     S_db = librosa.power_to_db(S, ref=np.max)
+        # else:
+        #     S = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
+        #     S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+
         S = librosa.feature.melspectrogram(
             y=y, sr=sr, n_mels=n_mels, n_fft=n_fft, 
             hop_length=hop_length, win_length=win_length, fmax=sr//2
@@ -441,7 +451,8 @@ def compute_occlusion_map(
             elif len(y_occluded) < len(y):
                 y_occluded = np.pad(y_occluded, (0, len(y) - len(y_occluded)))
             
-            occluded_pred = predict_fn(y_occluded, sr)
+            with Timer("Predicting occluded audio"):
+                occluded_pred = predict_fn(y_occluded, sr)
             
             importance = baseline_pred - occluded_pred
             importance_values.append(importance)

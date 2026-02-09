@@ -2,14 +2,14 @@
 
 # Dataset configuration
 dataset:
-  base_path: "Data/FakeRealMusicOriginalNormalized/minus23/base"  # Base path to dataset
+  base_path: "Data/FakeRealMusicOriginal"  # Base path to dataset
   models_to_process:
-    - UDIO
-    - SUNO
-    - SUNO_PRO
-    - ElevenLabs
+    # - UDIO
+    # - SUNO
+    # - SUNO_PRO
+    # - ElevenLabs
     - REAL
-  max_samples_per_model: 10
+  max_samples_per_model: 1
 
 # Model configuration  
 model:
@@ -69,8 +69,8 @@ explainability:
 
 # Output configuration
 output:
-  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus23/base/Occlusion"
-  experiment_name: "Full_Occlusion_2048_128_all_models"
+  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
+  experiment_name: "TIMER_TEST"
   
 # Checkpoint
 checkpoint:
