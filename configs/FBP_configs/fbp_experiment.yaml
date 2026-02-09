@@ -75,15 +75,15 @@ bands:
 spectrogram:
   sr: 44100
   duration: 120
-
-  # Mel spectrogram parameters
-  use_mel: false
-  n_mels: 512
-
-  # STFT
   n_fft: 2048
   hop_length: 512
   win_length: 2048
+
+  spec_type: "stft"  # "mel" or "stft"
+  fmax: null  # Only used for mel spectrograms
+
+  # Mel spectrogram parameters
+  n_mels: 512
   n_iter: 256
 
 explainability:
@@ -98,7 +98,7 @@ explainability:
 
 output:
   result_path: "results/FBP/FakeRealMusicOriginal/"
-  experiment_name: "FULL_TEST2"
+  experiment_name: "REFACTORED_STFT_WITH_TIME"
 
 # Checkpoint
 checkpoint:

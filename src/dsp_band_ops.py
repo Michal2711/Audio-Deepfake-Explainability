@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from datetime import datetime
 import time
@@ -18,10 +19,67 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# from spectrogram_explainability import timed
+
 try:
     from audioLIME.factorization_spleeter import SpleeterFactorization
 except Exception:
     SpleeterFactorization = None
+
+class TimeAggregator:
+    def __init__(self):
+        self.global_stats = {}
+        self.sample_stats = {}
+
+    def record(self, name: str, elapsed: float):
+        self.global_stats.setdefault(name, []).append(elapsed)
+        self.sample_stats.setdefault(name, []).append(elapsed)
+
+    def reset_sample(self):
+        self.sample_stats = {}
+
+    def summary(self, stats: dict[str, list[float]]):
+        out = {}
+        for name, values in stats.items():
+            total = sum(values)
+            count = len(values)
+            avg = total / count if count > 0 else 0.0
+            out[name] = {
+                "total": total,
+                "count": count,
+                "avg": avg
+            }
+        return out
+
+    def print_sample_summary(self):
+        if not self.sample_stats:
+            return
+        print("\n⏱️ Sample timing summary:")
+        for name, s in self.summary(self.sample_stats).items():
+            print(f"  - {name}: total {s['total']:.2f}s, calls {s['count']}, avg {s['avg']:.3f}s")
+
+    def print_global_summary(self):
+        if not self.global_stats:
+            return
+        print("\n⏱️ Global timing summary:")
+        for name, s in self.summary(self.global_stats).items():
+            print(f"  - {name}: total {s['total']:.2f}s, calls {s['count']}, avg {s['avg']:.3f}s")
+
+def timed(name: str):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            profiler = getattr(self, "profiler", None)
+            start = time.time()
+            try:
+                return func(self, *args, **kwargs)
+            finally:
+                elapsed = time.time() - start
+                if profiler is not None:
+                    profiler.record(name, elapsed)
+        return wrapper
+    return decorator
+
 
 def append_update_fbp_results(
     new_results: dict, 
@@ -240,80 +298,6 @@ class Predictor:
     def predict(self, audio_wave: np.ndarray, sr: int) -> float:
         raise NotImplementedError
 
-def save_frequency_band_importances(
-    y: np.ndarray,
-    S: np.ndarray,
-    batch_importances: list[dict],
-    sr: int,
-    n_fft: int,
-    hop_length: int,
-    win_length: int,
-    n_iter: int,
-    file_name: str,
-    save_dir: Path,
-    use_original_audio: bool = False,
-    save_audio: bool = True
-):
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    metadata = {
-        "file_name": file_name,
-        "bands": []
-    }
-
-    # Przygotuj częstotliwości odpowiadające indeksom w S
-    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
-
-    for idx, p in enumerate(batch_importances, 1):
-        low = p["low"]
-        high = p["high"]
-        importance = p["importance"]
-
-        if use_original_audio:
-            # Tu można by wycinać zakres czasowy, ale w FBP pracujesz globalnie na sygnale,
-            # więc po prostu zapisujemy cały sygnał z adnotacją pasma.
-            y_band = y.copy()
-        else:
-            # Rekonstrukcja tylko z danego pasma w S
-            mag, phase = librosa.magphase(S)
-            band_mask = (freqs >= low) & (freqs <= high)
-            mag_band = np.zeros_like(mag)
-            mag_band[band_mask, :] = mag[band_mask, :]
-
-            S_band = mag_band * phase
-            y_band = librosa.istft(
-                S_band,
-                hop_length=hop_length,
-                win_length=win_length,
-                window="hann",
-                center=True
-            )
-            
-        importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
-
-        if save_audio:
-            # Normalizacja, żeby uniknąć clippingu
-            if np.max(np.abs(y_band)) > 0:
-                y_band = y_band / np.max(np.abs(y_band)) * 0.99
-
-            out_path = save_dir / (
-                f"{file_name}__band{idx}_{int(low)}-{int(high)}Hz_{importance_type}_"
-                f"{importance:+.3f}.wav"
-            )
-            sf.write(str(out_path), y_band, sr)
-        
-        metadata["bands"].append({
-            "low": low,
-            "high": high,
-            "importance": importance,
-            "abs_importance": abs(importance),
-            "type": importance_type
-        })
-
-    meta_path = save_dir / f"{file_name}_bands_metadata.json"
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
-
 class FBDResult(NamedTuple):
     importance_map: Optional[np.ndarray]
     spectrogram_db: np.ndarray
@@ -335,12 +319,14 @@ class FrequencyBandPerturbation:
                  transition_max_hz: float = 0.0,
                  sr: int = 44100,
                  duration: int = 120,
-                 use_mel: bool = False,
                  n_mels: int = 128,
                  n_fft: int = 2048,
                  hop_length: int = 512,
                  win_length: int = 2048,
                  n_iter: int = 256,
+                 spec_type: str = "stft",
+                 fmax: Optional[float] = None,
+                 use_original_audio: bool = False,
                  use_separation: bool = False,
                  separation_model: str = "spleeter:2stems",
                  separation_targets: Tuple[str, ...] = ("vocals0", "accompaniment0"),
@@ -366,13 +352,19 @@ class FrequencyBandPerturbation:
 
         self.sr = sr
         self.duration = duration
-        self.use_mel = use_mel
         self.n_mels = n_mels
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.win_length = win_length
         self.n_iter = n_iter
 
+        self.spec_type = spec_type.lower()
+        if self.spec_type not in ("stft"):
+            raise ValueError("FrequencyBandPerturbation currently supports only spec_type='stft'")
+
+        self.fmax = fmax if fmax is not None else sr // 2
+
+        self.use_original_audio = use_original_audio
         self.use_separation = use_separation
         self.separation_model = separation_model
         self.separation_targets = separation_targets
@@ -380,8 +372,59 @@ class FrequencyBandPerturbation:
         self.normalize_loudness = normalize_loudness
         self.lufs = lufs
 
+        self.profiler = TimeAggregator()
+
         if checkpoint_dir:
             self.checkpoint = ExperimentCheckpoint(checkpoint_dir)
+
+    @timed("Computing spectrogram")
+    def _compute_spectrogram(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:  
+        """Return (S, S_db) for current spec_type"""
+        if self.spec_type == "mel":
+            S = librosa.feature.melspectrogram(
+                y=y, 
+                sr=self.sr, 
+                n_mels=self.n_mels, 
+                n_fft=self.n_fft, 
+                hop_length=self.hop_length,
+                win_length=self.win_length, 
+                fmax=self.fmax
+            )
+            S_db = librosa.power_to_db(S, ref=np.max)
+        else:
+            S = librosa.stft(
+                y, 
+                n_fft=self.n_fft, 
+                hop_length=self.hop_length, 
+                win_length=self.win_length,
+                window='hann',
+                center=True
+            )
+            S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+        
+        return S, S_db
+    
+    @timed("Inverting spectrogram")
+    def _invert_spectrogram(self, S: np.ndarray) -> np.ndarray:
+        """Invert spectrogram to audio using current spec_type"""
+        if self.spec_type == "mel":
+            y_rec = librosa.feature.inverse.mel_to_audio(
+                S, 
+                sr=self.sr, 
+                n_fft=self.n_fft, 
+                hop_length=self.hop_length,
+                win_length=self.win_length, 
+                n_iter=self.n_iter
+            )
+        else:
+            y_rec = librosa.istft(
+                S, 
+                hop_length=self.hop_length, 
+                win_length=self.win_length,
+                window='hann',
+                center=True
+            )
+        return y_rec
 
     def _band_transition_width(self, low: float, high: float) -> float:
         bw = float(high - low)
@@ -392,6 +435,7 @@ class FrequencyBandPerturbation:
             trans = float(self.transition_hz)
         return trans
 
+    @timed("Predicting audio")
     def _predict(self, wave: np.ndarray) -> float:
         "Wrapper for predictor"
         try:
@@ -401,6 +445,7 @@ class FrequencyBandPerturbation:
             print(f"[Warning] Prediction error: {type(e).__name__}: {e}")
             return 0.0
 
+    @timed("Separating sources")
     def _separate_sources(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
         if not self.use_separation:
             return {"mixture": audio}
@@ -418,6 +463,77 @@ class FrequencyBandPerturbation:
         )
         return dict(zip(fact._components_names, fact.original_components))
 
+    def _save_frequency_band_importances(
+        self,
+        y: np.ndarray,
+        S: np.ndarray,
+        batch_importances: list[dict],
+        file_name: str,
+        save_dir: Path,
+        save_audio: bool = True
+    ):
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        metadata = {
+            "file_name": file_name,
+            "bands": []
+        }
+
+        # Przygotuj częstotliwości odpowiadające indeksom w S
+        freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
+
+        for idx, p in enumerate(batch_importances, 1):
+            low = p["low"]
+            high = p["high"]
+            importance = p["importance"]
+
+            if self.use_original_audio:
+                # Tu można by wycinać zakres czasowy, ale w FBP pracujesz globalnie na sygnale,
+                # więc po prostu zapisujemy cały sygnał z adnotacją pasma.
+                y_band = y.copy()
+            else:
+                # Rekonstrukcja tylko z danego pasma w S
+                mag, phase = librosa.magphase(S)
+                band_mask = (freqs >= low) & (freqs <= high)
+                mag_band = np.zeros_like(mag)
+                mag_band[band_mask, :] = mag[band_mask, :]
+
+                S_band = mag_band * phase
+                y_band = self._invert_spectrogram(S_band)
+                # y_band = librosa.istft(
+                #     S_band,
+                #     hop_length=self.hop_length,
+                #     win_length=self.win_length,
+                #     window="hann",
+                #     center=True
+                # )
+                
+            importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
+
+            if save_audio:
+                # Normalizacja, żeby uniknąć clippingu
+                if np.max(np.abs(y_band)) > 0:
+                    y_band = y_band / np.max(np.abs(y_band)) * 0.99
+
+                out_path = save_dir / (
+                    f"{file_name}__band{idx}_{int(low)}-{int(high)}Hz_{importance_type}_"
+                    f"{importance:+.3f}.wav"
+                )
+                sf.write(str(out_path), y_band, self.sr)
+            
+            metadata["bands"].append({
+                "low": low,
+                "high": high,
+                "importance": importance,
+                "abs_importance": abs(importance),
+                "type": importance_type
+            })
+
+        meta_path = save_dir / f"{file_name}_bands_metadata.json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+    @timed("Computing importance for bands")
     def _compute_importance(
             self, 
             audio_path: str,
@@ -452,17 +568,8 @@ class FrequencyBandPerturbation:
                         self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
                     raise
 
-            # if self.use_mel:
-            #     S_mel = librosa.feature.melspectrogram(
-            #         y=sig, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, n_mels=self.n_mels
-            #     )
-            #     _ = librosa.power_to_db(S_mel, ref=np.max)
-
-            #     S = librosa.stft(sig, n_fft=self.n_fft, hop_length=self.hop_length, window="hann", center=True)
-            #     mag, phase = librosa.magphase(S)
-            #     freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
-            # else:
-            S = librosa.stft(sig, n_fft=self.n_fft, hop_length=self.hop_length, window="hann", center=True)
+            S, S_db = self._compute_spectrogram(sig)
+            # S = librosa.stft(sig, n_fft=self.n_fft, hop_length=self.hop_length, window="hann", center=True)
             mag, phase = librosa.magphase(S)
             freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
             
@@ -476,7 +583,8 @@ class FrequencyBandPerturbation:
                 mag_p = mag * keep_band[:, None]
 
                 S_p = mag_p * phase
-                y_p = librosa.istft(S_p, hop_length=self.hop_length, window="hann", center=True)
+                y_p = self._invert_spectrogram(S_p)
+                # y_p = librosa.istft(S_p, hop_length=self.hop_length, window="hann", center=True)
 
                 if self.normalize_loudness:
                     y_p = match_rms(sig, y_p)
@@ -508,11 +616,11 @@ class FrequencyBandPerturbation:
                 band_mask = (freqs >= low) & (freqs <= high)
                 importance_map[band_mask, :] += delta
 
-            spectrogram_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+            # spectrogram_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
 
             return FBDResult(
                 importance_map=importance_map,
-                spectrogram_db=spectrogram_db,
+                spectrogram_db=S_db,
                 baseline_pred=orig_prob,
                 y=sig,
                 S=S,
@@ -520,6 +628,7 @@ class FrequencyBandPerturbation:
             )
 
     @tf_retry_decorator(max_retries=20)
+    @timed("Processing audio file")
     def process_audio_file(
         self, 
         audio_path: str, 
@@ -540,6 +649,9 @@ class FrequencyBandPerturbation:
         Returns:
             DataFrame with results or empty DataFrame in case of error
         """
+
+        if self.profiler:
+            self.profiler.reset_sample()
 
         file_name = Path(audio_path).stem
 
@@ -579,26 +691,21 @@ class FrequencyBandPerturbation:
                         S = result.S
                     else:
                         y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
-                        S = librosa.stft(
-                            y, n_fft=self.n_fft, hop_length=self.hop_length, 
-                            window="hann", center=True
-                        )
+                        S, _ = self._compute_spectrogram(y)
+                        # S = librosa.stft(
+                        #     y, n_fft=self.n_fft, hop_length=self.hop_length, 
+                        #     window="hann", center=True
+                        # )
 
                     freqs_dir = track_output_dir / "freq_batches"
                     freqs_dir.mkdir(parents=True, exist_ok=True)
 
-                    save_frequency_band_importances(
+                    self._save_frequency_band_importances(
                         y=y,
                         S=S,
                         batch_importances=result.batch_importances,
-                        sr=self.sr,
-                        n_fft=self.n_fft,
-                        hop_length=self.hop_length,
-                        win_length=self.win_length,
-                        n_iter=self.n_iter,
                         file_name=file_name,
-                        save_dir=freqs_dir,
-                        use_original_audio=False  # albo True, jeśli chcesz pełny sygnał
+                        save_dir=freqs_dir
                     )
 
                     visualize_file_bands(
@@ -623,6 +730,9 @@ class FrequencyBandPerturbation:
 
                 if self.checkpoint:
                     self.checkpoint.mark_as_processed(audio_path, success=True)
+
+                if self.profiler:
+                    self.profiler.print_sample_summary()
 
                 return {
                     'file_path': str(audio_path),
@@ -766,6 +876,9 @@ class FrequencyBandPerturbation:
             print(f"📄 Results saved: {csv_path}")
             print(f"🎛️  Bands: {bands_dir}")
             print("=" * 70 + "\n")
+
+            if self.profiler:
+                self.profiler.print_global_summary()
 
             return df
             
