@@ -1,9 +1,11 @@
-# scripts/run_experiment.py
+# scripts/run_FBP_experiment.py
 from __future__ import annotations
 
 import os
 import sys
 import warnings
+
+from sonics.models import model
 
 warnings.filterwarnings('ignore')
 
@@ -31,7 +33,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from dsp_band_ops import FBPConfig, FrequencyBandPerturbation
+from dsp_band_ops import FrequencyBandPerturbation
 from sonics_api import LocalSonnics, RemoteSonnics
 
 
@@ -39,129 +41,115 @@ def load_yaml(path: Path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-
-def build_fbp_config(base_cfg: dict, bands_cfg: dict) -> FBPConfig:
-    trans = bands_cfg.get("transition", {})
-    cfg = FBPConfig(
-        model_time=int(base_cfg.get("model_time", 120)),
-        sr=int(base_cfg.get("sample_rate", 44100)),
-        use_mel=bool(base_cfg.get("use_mel", False)),
-        n_mels=int(base_cfg.get("n_mels", 128)),
-        use_separation=bool(base_cfg.get("use_separation", False)),
-        separation_model=str(base_cfg.get("separation_model", "spleeter:2stems")),
-        separation_targets=tuple(base_cfg.get("separation_targets", ("vocals0", "accompaniment0"))),
-        bands_preset=str(bands_cfg.get("preset", "default")),
-        custom_bands=None,
-        attenuation=float(bands_cfg.get("attenuation", 0.0)),
-        transition_mode=str(trans.get("mode", "rel")),
-        transition_hz=float(trans.get("hz", 200.0)),
-        transition_rel=float(trans.get("rel", 0.2)),
-        transition_min_hz=float(trans.get("min_hz", 20.0)),
-        transition_max_hz=float(trans.get("max_hz", 2000.0)),
-        n_fft=int(base_cfg.get("n_fft", 2048)),
-        hop_length=int(base_cfg.get("hop_length", 512)),
-        normalize_loudness=bool(base_cfg.get("normalize_loudness", True)),
-    )
-    presets = bands_cfg.get("presets", {})
-    preset_name = bands_cfg.get("preset", "default")
-    if preset_name in presets:
-        cfg.custom_bands = [tuple(map(int, pair)) for pair in presets[preset_name]]
-    return cfg
-
-
-def build_predictor(exp_cfg: dict, base_cfg: dict):
+def build_predictor(model_cfg: dict):
     """Builds a predictor with optional retry configuration"""
-    if bool(exp_cfg.get("local", False)):
-        model_name = str(exp_cfg.get("local_model", "awsaf49/sonics-spectttra-alpha-120s"))
+    if bool(model_cfg.get("local", False)):
+        model_name = str(model_cfg.get("local_model", "awsaf49/sonics-spectttra-alpha-120s"))
         predictor = LocalSonnics.from_pretrained(model_name)
     else:
-        retry_cfg = exp_cfg.get("retry", {})
+        retry_cfg = model_cfg.get("retry", {})
         
         predictor = RemoteSonnics(
-            space=str(exp_cfg.get("remote_space", "awsaf49/sonics-fake-song-detection")),
-            model_time=int(base_cfg.get("model_time", 120)),
-            api_name=str(exp_cfg.get("remote_api_name", "/predict")),
-            model_type=str(exp_cfg.get("remote_model_type", "SpecTTTra-α")),
+            space=str(model_cfg.get("remote_space", "awsaf49/sonics-fake-song-detection")),
+            model_time=int(model_cfg.get("model_time", 120)),
+            api_name=str(model_cfg.get("remote_api_name", "/predict")),
+            model_type=str(model_cfg.get("remote_model_type", "SpecTTTra-α")),
             max_retries=int(retry_cfg.get("max_retries", 10)),
             initial_delay=float(retry_cfg.get("initial_delay", 3.0)),
             max_delay=float(retry_cfg.get("max_delay", 120.0)),
         )
     return predictor
 
+def save_experiment_config(config: dict, output_dir: Path, experiment_name: str):
+    """
+    Save experiment configuration to output directory.
+    
+    :param config: Configuration dictionary
+    :param output_dir: Output directory
+    :param experiment_name: Experiment name
+    """
+    import yaml
+    from datetime import datetime
+    
+    config_dir = output_dir / "configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    config_path = config_dir / f"config_{timestamp}.yaml"
+    
+    config_with_meta = {
+        'experiment_info': {
+            'name': experiment_name,
+            'timestamp': timestamp,
+            'created_at': datetime.now().isoformat()
+        },
+        **config
+    }
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config_with_meta, f, default_flow_style=False, allow_unicode=True)
+    
+    print(f"💾 Config saved: {config_path}")
+    return config_path
+
 def main():
     ap = argparse.ArgumentParser(description="Run Frequency Band Perturbation experiment")
-    ap.add_argument("--base", default=str(ROOT / "configs" / "base.yaml"))
-    ap.add_argument("--bands", default=str(ROOT / "configs" / "bands.yaml"))
-    ap.add_argument("--exp", default=str(ROOT / "configs" / "experiment.yaml"))
-    ap.add_argument("--resume", action="store_true", help="Resume experiment from checkpoint")
-    ap.add_argument("--force-reprocess", action="store_true", help="Force reprocess all files from scratch")
+    ap.add_argument("--config", default=str(ROOT / "configs" / "fbp_experiment.yaml"))
     ap.add_argument("--no-checkpoint", action="store_true", help="Disable checkpointing")
-    ap.add_argument("--show-failed", action="store_true", help="Show only list of failed files and exit")
+    ap.add_argument("--resume", action="store_true", help="Resume experiment from checkpoint")
     args = ap.parse_args()
 
-    base_cfg = load_yaml(Path(args.base))
-    bands_cfg = load_yaml(Path(args.bands))
-    exp_cfg = load_yaml(Path(args.exp))
+    config = load_yaml(Path(args.config))
 
-    base_path = Path(exp_cfg.get("base_path", "../../Data/FakeRealMusicOriginal"))
-    output_root = Path(exp_cfg.get("output_root", "results/FakeRealMusicOriginal"))
-    experiment_name = str(exp_cfg.get("experiment_name", "exp"))
-    limit_per_folder = exp_cfg.get("limit_per_folder", None)
+    dataset_cfg = config.get("dataset", {})
+    model_cfg = config.get("model", {})
+    bands_cfg = config.get("bands", {})
+    spectrogram_cfg = config.get("spectrogram", {})
+    explain_cfg = config.get("explainability", {})
+    output_cfg = config.get("output", {})
+    checkpoint_cfg = config.get("checkpoint", {})
+
+    base_path = Path(dataset_cfg.get("base_path"))
+    output_root = Path(output_cfg.get("result_path"))
+    experiment_name = str(output_cfg.get("experiment_name", "exp"))
     
+    output_dir = output_root / experiment_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = save_experiment_config(config, output_dir, experiment_name)
+
     checkpoint_dir = None
-    if not args.no_checkpoint:
-        checkpoint_dir = output_root / experiment_name / "checkpoints"
+    if checkpoint_cfg.get('enabled', True) and not args.no_checkpoint:
+        checkpoint_dir = output_dir / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.show_failed:
-        if checkpoint_dir is None or not (checkpoint_dir / "failed_files.json").exists():
-            print("❌ No failed files data found. Run the experiment with checkpointing.")
-            sys.exit(1)
-        
-        from dsp_band_ops import ExperimentCheckpoint
-        checkpoint = ExperimentCheckpoint(checkpoint_dir)
-        failed = checkpoint.get_failed_files()
-        
-        if not failed:
-            print("✅ No failed files!")
-        else:
-            print(f"\n❌ Failed files ({len(failed)}):\n")
-            for idx, fail_info in enumerate(failed, 1):
-                print(f"{idx}. {Path(fail_info['file_path']).name}")
-                print(f"   Error: {fail_info['error']}")
-                print(f"   Time: {fail_info['timestamp']}\n")
-
-        sys.exit(0)
-
-    predictor = build_predictor(exp_cfg, base_cfg)
-    fbp_cfg = build_fbp_config(base_cfg, bands_cfg)
+    predictor = build_predictor(model_cfg)
 
     fbp = FrequencyBandPerturbation(
-        predictor=predictor, 
-        cfg=fbp_cfg,
+        predictor=predictor,
+        preset = bands_cfg.get("preset", "default"),
+        presets = bands_cfg.get("presets", {}),
+        attenuation = float(bands_cfg.get("attenuation", 0.0)),
+        transition_mode = str(bands_cfg.get("transition", {}).get("mode", "rel")),
+        transition_hz = float(bands_cfg.get("transition", {}).get("hz", 200.0)),
+        transition_rel = float(bands_cfg.get("transition", {}).get("rel", 0.2)),
+        transition_min_hz = float(bands_cfg.get("transition", {}).get("min_hz", 20.0)),
+        transition_max_hz = float(bands_cfg.get("transition", {}).get("max_hz", 2000.0)),
+        sr = int(spectrogram_cfg.get("sample_rate", 44100)),
+        duration=int(spectrogram_cfg.get("model_time", 120)),
+        use_mel = bool(spectrogram_cfg.get("use_mel", False)),
+        n_mels = int(spectrogram_cfg.get("n_mels", 128)),
+        n_fft = int(spectrogram_cfg.get("n_fft", 2048)),
+        hop_length = int(spectrogram_cfg.get("hop_length", 512)),
+        win_length=int(spectrogram_cfg.get("win_length", 2048)),
+        n_iter=int(spectrogram_cfg.get("n_iter", 32)),
+        use_separation=bool(explain_cfg.get("use_separation", False)),
+        separation_model=str(explain_cfg.get("separation_model", "spleeter:2stems")),
+        separation_targets=tuple(explain_cfg.get("separation_targets", ("vocals0", "accompaniment0"))),
+        normalize_loudness=bool(explain_cfg.get("normalize_loudness", True)),
+        lufs=float(explain_cfg.get("lufs", -14.0)), 
         checkpoint_dir=checkpoint_dir
     )
-    
-    print("\n" + "=" * 70)
-    print("🎵 Frequency Band Perturbation Experiment")
-    print("=" * 70)
-    print(f"📁 Data Source: {base_path}")
-    print(f"📊 Output: {output_root / experiment_name}")
-    print(f"🔧 Checkpoint: {'Enabled' if checkpoint_dir else 'Disabled'}")
-
-    if checkpoint_dir:
-        print(f"📂 Checkpoint dir: {checkpoint_dir}")
-        if args.resume:
-            print("🔄 Mode: Resume from last checkpoint")
-        elif args.force_reprocess:
-            print("🔄 Mode: Force reprocess all files")
-        else:
-            print("🔄 Mode: Normal (auto-resume if checkpoint exists)")
-
-    if limit_per_folder:
-        print(f"📏 Limit per folder: {limit_per_folder}")
-
-    print("=" * 70 + "\n")
 
     previous_results = None
     if args.resume and checkpoint_dir and not args.force_reprocess:
@@ -169,117 +157,44 @@ def main():
 
     try:
         df = fbp.run_experiment(
-            base_path=base_path, 
-            limit_per_folder=limit_per_folder,
-            resume=args.resume or (not args.force_reprocess),  # Default resume=True
-            force_reprocess=args.force_reprocess,
-            previous_results=previous_results
+            base_path=base_path,
+            output_dir=output_dir,
+            models_to_process=dataset_cfg.get('models_to_process'),
+            max_samples_per_model=dataset_cfg.get('max_samples_per_model'),
+            results_path=output_dir / f"fbp_results.json"
         )
     except KeyboardInterrupt:
-        print("\n\n⚠️  Experiment interrupted by user (Ctrl+C)")
-        print("💾 Progress saved in checkpoint.")
-        print(f"📂 Checkpoint: {checkpoint_dir}")
-        print("\n💡 To resume, restart with --resume flag")
+        print("\n\n⚠️  Experiment interrupted (Ctrl+C)")
+        if checkpoint_dir:
+            print(f"💾 Progress saved in: {checkpoint_dir}")
+            print("💡 Resume with --resume flag")
         sys.exit(0)
     except Exception as e:
         print(f"\n\n❌ Critical error: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
-        
-        if checkpoint_dir:
-            print(f"\n💾 Progress saved in: {checkpoint_dir}")
-            print("💡 To resume, restart with --resume flag")
-
         sys.exit(1)
-
+    
     if df.empty:
-        print("\n⚠️  WARNING: No results to save!")
-        print("All files may have failed or have already been processed.")
-
-        if checkpoint_dir:
-            from dsp_band_ops import ExperimentCheckpoint
-            checkpoint = ExperimentCheckpoint(checkpoint_dir)
-            stats = checkpoint.get_stats()
-            failed = checkpoint.get_failed_files()
-
-            print(f"\n📊 Checkpoint statistics:")
-            print(f"   Processed: {stats['total_processed']}")
-            print(f"   Failed: {stats['total_failed']}")
-
-            if failed:
-                print(f"\n❌ Examples of failed files (last 5):")
-                for fail_info in failed[-5:]:
-                    print(f"   - {Path(fail_info['file_path']).name}")
-                    print(f"     {fail_info['error'][:100]}")
-        
+        print("\n⚠️  No results generated!")
         sys.exit(1)
-
-    extra_meta = {
-        "versions": {
-            "python": sys.version.split()[0],
-            "numpy": np.__version__,
-            "librosa": librosa.__version__,
-        },
-        "config_files": {
-            "base": str(Path(args.base)),
-            "bands": str(Path(args.bands)),
-            "experiment": str(Path(args.exp)),
-        },
-        "execution": {
-            "resumed": args.resume,
-            "force_reprocess": args.force_reprocess,
-            "checkpoint_enabled": checkpoint_dir is not None,
-        }
-    }
-
-    save = fbp.save_experiment_results(
-        results_df=df,
-        output_dir=output_root,
-        experiment_name=experiment_name,
-        extra_meta=extra_meta,
-        is_merged=(previous_results is not None)
-    )
 
     print("\n📊 Generating visualizations...")
-    vis_root = Path(save["experiment_dir"]) / "visualizations"
+    viz_dir = output_dir / "aggregate_visualizations"
     
     try:
-        fbp.visualize_results(df, output_dir=vis_root / "results")
+        fbp.visualize_results(df, output_dir=viz_dir)
         print("   ✅ Result visualizations")
     except Exception as e:
         print(f"   ⚠️  Error visualizing results: {e}")
 
-    try:
-        fbp.visualize_embedding(df, output_dir=vis_root / "embeddings")
-        print("   ✅ Embedding visualizations")
-    except Exception as e:
-        print(f"   ⚠️  Error visualizing embeddings: {e}")
-
     print("\n" + "=" * 70)
-    print("✅ Experiment completed successfully!")
+    print("🎉 All done!")
     print("=" * 70)
-    print(f"📄 CSV  -> {save['results_csv']}")
-    print(f"📋 JSON -> {save['params_json']}")
-    print(f"📁 Dir  -> {save['experiment_dir']}")
-    
-    if checkpoint_dir:
-        from dsp_band_ops import ExperimentCheckpoint
-        checkpoint = ExperimentCheckpoint(checkpoint_dir)
-        stats = checkpoint.get_stats()
-        failed = checkpoint.get_failed_files()
-
-        print(f"\n📊 Final statistics:")
-        print(f"   Successfully processed: {stats['total_processed'] - stats['total_failed']}")
-        print(f"   Failed: {stats['total_failed']}")
-        print(f"   Total number of results in CSV: {len(df)}")
-
-        if failed:
-            print(f"\n⚠️  {len(failed)} files failed")
-            print(f"   Run: python {Path(__file__).name} --show-failed")
-            print(f"   to see details")
-
+    print(f"💾 Configuration: {config_path}")
+    print(f"📈 Aggregate visualizations: {viz_dir}")
+    print(f"📄 Results CSV: {list(output_dir.glob('fbp_results_*.csv'))[-1]}")
     print("=" * 70 + "\n")
-
 
 if __name__ == "__main__":
     main()

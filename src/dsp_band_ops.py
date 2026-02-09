@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 import time
-from typing import Iterable, List, Tuple, Optional, Dict, Any
+from typing import Iterable, List, NamedTuple, Tuple, Optional, Dict, Any
 
 import json
 import numpy as np
@@ -13,6 +13,7 @@ import pandas as pd
 import librosa
 import soundfile as sf
 import torch
+import os
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -21,6 +22,40 @@ try:
     from audioLIME.factorization_spleeter import SpleeterFactorization
 except Exception:
     SpleeterFactorization = None
+
+def append_update_fbp_results(
+    new_results: dict, 
+    results_path: Path
+) -> None:
+    """
+    Structure:
+    {
+        "ModelA": {
+            "file1": { ...result... },
+            "file2": { ... }
+        },
+        "ModelB": { ... }
+    }
+    """
+    merged: dict = {}
+
+    if results_path.exists():
+        try:
+            with open(results_path, "r", encoding="utf-8") as f:
+                merged = json.load(f)
+        except Exception:
+            print(f"⚠️ Warning: could not read existing spectrogram results from {results_path}")
+            merged = {}
+
+    for model_name, files_dict in new_results.items():
+        if model_name not in merged:
+            merged[model_name] = {}
+        for file_key, data in files_dict.items():
+            merged[model_name][file_key] = data
+
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=4, ensure_ascii=False)
 
 class ExperimentCheckpoint:
     """
@@ -86,11 +121,6 @@ class ExperimentCheckpoint:
 
         with open(self.progress_log, 'a', encoding='utf-8') as f:
             f.write(f"[FAILED] {datetime.now().isoformat()} | {file_path} | {error_msg}\n")
-    
-    def log_success(self, file_path: str, num_results: int):
-        """Log success of processing"""
-        with open(self.progress_log, 'a', encoding='utf-8') as f:
-            f.write(f"[SUCCESS] {datetime.now().isoformat()} | {file_path} | {num_results} results\n")
     
     def get_failed_files(self) -> list:
         """Return list of files that failed"""
@@ -198,7 +228,7 @@ def tf_retry_decorator(max_retries: int = 20):
                     raise
                     
             print(f"[Error] Failed to complete {func.__name__} after {max_retries} attempts.")
-            return pd.DataFrame() if func.__name__ == "process_audio" else None
+            return pd.DataFrame() if func.__name__ == "process_audio_file" else None
         return wrapper
     return decorator
 
@@ -210,64 +240,169 @@ class Predictor:
     def predict(self, audio_wave: np.ndarray, sr: int) -> float:
         raise NotImplementedError
 
-@dataclass
-class FBPConfig:
-    model_time: int = 120
-    sr: int = 44100
-    use_mel: bool = False
-    n_mels: int = 128
-    use_separation: bool = False
-    separation_model: str = "spleeter:2stems"
-    separation_targets: Tuple[str, ...] = ("vocals0", "accompaniment0")
-    lufs: Optional[float] = None  # if None, no LUFS normalization
-    bands_preset: str = "default"
-    custom_bands: Optional[List[Tuple[int, int]]] = None
-    attenuation: float = 0.0  # 0 mute, 1 no change
-    transition_mode: str = "rel"  # "abs" or "rel"
-    transition_hz: float = 200.0
-    transition_rel: float = 0.2
-    transition_min_hz: float = 20.0
-    transition_max_hz: float = 2000.0
-    normalize_loudness: bool = True
-    n_fft: int = 2048
-    hop_length: int = 512
+def save_frequency_band_importances(
+    y: np.ndarray,
+    S: np.ndarray,
+    batch_importances: list[dict],
+    sr: int,
+    n_fft: int,
+    hop_length: int,
+    win_length: int,
+    n_iter: int,
+    file_name: str,
+    save_dir: Path,
+    use_original_audio: bool = False,
+    save_audio: bool = True
+):
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata = {
+        "file_name": file_name,
+        "bands": []
+    }
+
+    # Przygotuj częstotliwości odpowiadające indeksom w S
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    for idx, p in enumerate(batch_importances, 1):
+        low = p["low"]
+        high = p["high"]
+        importance = p["importance"]
+
+        if use_original_audio:
+            # Tu można by wycinać zakres czasowy, ale w FBP pracujesz globalnie na sygnale,
+            # więc po prostu zapisujemy cały sygnał z adnotacją pasma.
+            y_band = y.copy()
+        else:
+            # Rekonstrukcja tylko z danego pasma w S
+            mag, phase = librosa.magphase(S)
+            band_mask = (freqs >= low) & (freqs <= high)
+            mag_band = np.zeros_like(mag)
+            mag_band[band_mask, :] = mag[band_mask, :]
+
+            S_band = mag_band * phase
+            y_band = librosa.istft(
+                S_band,
+                hop_length=hop_length,
+                win_length=win_length,
+                window="hann",
+                center=True
+            )
+            
+        importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
+
+        if save_audio:
+            # Normalizacja, żeby uniknąć clippingu
+            if np.max(np.abs(y_band)) > 0:
+                y_band = y_band / np.max(np.abs(y_band)) * 0.99
+
+            out_path = save_dir / (
+                f"{file_name}__band{idx}_{int(low)}-{int(high)}Hz_{importance_type}_"
+                f"{importance:+.3f}.wav"
+            )
+            sf.write(str(out_path), y_band, sr)
+        
+        metadata["bands"].append({
+            "low": low,
+            "high": high,
+            "importance": importance,
+            "abs_importance": abs(importance),
+            "type": importance_type
+        })
+
+    meta_path = save_dir / f"{file_name}_bands_metadata.json"
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+class FBDResult(NamedTuple):
+    importance_map: Optional[np.ndarray]
+    spectrogram_db: np.ndarray
+    baseline_pred: float
+    y: np.ndarray
+    S: np.ndarray
+    batch_importances: Optional[list[dict]]
 
 class FrequencyBandPerturbation:
-    def __init__(self, predictor: Predictor, cfg: FBPConfig, checkpoint_dir: Optional[str | Path] = None):
+    def __init__(self, 
+                 predictor: Predictor,
+                 preset: str = "default",
+                 presets: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+                 attenuation: float = 0.0,
+                 transition_mode: str = "rel",
+                 transition_hz: float = 0.0,
+                 transition_rel: float = 0.0,
+                 transition_min_hz: float = 0.0, 
+                 transition_max_hz: float = 0.0,
+                 sr: int = 44100,
+                 duration: int = 120,
+                 use_mel: bool = False,
+                 n_mels: int = 128,
+                 n_fft: int = 2048,
+                 hop_length: int = 512,
+                 win_length: int = 2048,
+                 n_iter: int = 256,
+                 use_separation: bool = False,
+                 separation_model: str = "spleeter:2stems",
+                 separation_targets: Tuple[str, ...] = ("vocals0", "accompaniment0"),
+                 normalize_loudness: bool = True,
+                 lufs: Optional[float] = None,
+                 checkpoint_dir: Optional[str | Path] = None
+    ):
         self.predictor = predictor
-        self.cfg = cfg
+        self.preset = preset
+        self.presets = presets
+
+        if self.presets is not None:
+            self.bands = self.presets.get(self.preset, FREQUENCY_BAND_PRESETS["default"])
+        else:
+            self.bands = FREQUENCY_BAND_PRESETS.get(self.preset, FREQUENCY_BAND_PRESETS["default"])
+
+        self.attenuation = attenuation
+        self.transition_mode = transition_mode
+        self.transition_hz = transition_hz
+        self.transition_rel = transition_rel
+        self.transition_min_hz = transition_min_hz
+        self.transition_max_hz = transition_max_hz
+
+        self.sr = sr
+        self.duration = duration
+        self.use_mel = use_mel
+        self.n_mels = n_mels
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.n_iter = n_iter
+
+        self.use_separation = use_separation
+        self.separation_model = separation_model
+        self.separation_targets = separation_targets
+
+        self.normalize_loudness = normalize_loudness
+        self.lufs = lufs
 
         if checkpoint_dir:
             self.checkpoint = ExperimentCheckpoint(checkpoint_dir)
-        else:
-            self.checkpoint = None
-
-        if cfg.custom_bands is not None:
-            self.bands = list(cfg.custom_bands)
-        else:
-            self.bands = FREQUENCY_BAND_PRESETS.get(cfg.bands_preset, FREQUENCY_BAND_PRESETS["default"])
-
-        self.cfg.attenuation = float(np.clip(self.cfg.attenuation, 0.0, 1.0))
-        self.cfg.transition_hz = float(max(0.0, self.cfg.transition_hz))
-        self.cfg.transition_rel = float(max(0.0, self.cfg.transition_rel))
-        self.cfg.transition_min_hz = float(max(0.0, self.cfg.transition_min_hz))
-        self.cfg.transition_max_hz = float(max(0.0, self.cfg.transition_max_hz))
 
     def _band_transition_width(self, low: float, high: float) -> float:
         bw = float(high - low)
-        if self.cfg.transition_mode == "rel":
-            trans = bw * self.cfg.transition_rel
-            trans = float(np.clip(trans, self.cfg.transition_min_hz, self.cfg.transition_max_hz))
+        if self.transition_mode == "rel":
+            trans = bw * self.transition_rel
+            trans = float(np.clip(trans, self.transition_min_hz, self.transition_max_hz))
         else:
-            trans = float(self.cfg.transition_hz)
+            trans = float(self.transition_hz)
         return trans
 
     def _predict(self, wave: np.ndarray) -> float:
-        with torch.no_grad():
-            return float(self.predictor.predict(wave, self.cfg.sr))
+        "Wrapper for predictor"
+        try:
+            with torch.no_grad():
+                return float(self.predictor.predict(wave, self.sr))
+        except Exception as e:
+            print(f"[Warning] Prediction error: {type(e).__name__}: {e}")
+            return 0.0
 
     def _separate_sources(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
-        if not self.cfg.use_separation:
+        if not self.use_separation:
             return {"mixture": audio}
 
         if SpleeterFactorization is None:
@@ -276,116 +411,230 @@ class FrequencyBandPerturbation:
 
         fact = SpleeterFactorization(
             input=audio,
-            target_sr=self.cfg.sr,
+            target_sr=self.sr,
             temporal_segmentation_params=1,
             composition_fn=None,
-            model_name=self.cfg.separation_model,
+            model_name=self.separation_model,
         )
         return dict(zip(fact._components_names, fact.original_components))
 
+    def _compute_importance(
+            self, 
+            audio_path: str,
+            file_attempt: int = 0,
+            max_file_retries: int = 3,
+            retry_on_error: bool = True
+        ) -> FBDResult:
+
+        y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
+
+        components = self._separate_sources(y)
+        target_names = [nm for nm in list(components.keys()) if nm in self.separation_targets]
+        
+        if not target_names:
+            target_names = list(components.keys())
+
+        for name in target_names:
+            sig = components[name]
+            
+            try:
+                orig_prob = self._predict(sig)
+            except Exception as pred_err:
+                error_msg = f"Prediction error for component {name}: {type(pred_err).__name__}: {pred_err}"
+                print(f"[Warning] {error_msg}")
+            
+                if file_attempt < max_file_retries - 1 and retry_on_error:
+                    print(f"[Info] Retrying file {audio_path} (attempt {file_attempt + 2}/{max_file_retries})")
+                    time.sleep(2.0 * (file_attempt + 1))
+                    break
+                else:
+                    if self.checkpoint:
+                        self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
+                    raise
+
+            # if self.use_mel:
+            #     S_mel = librosa.feature.melspectrogram(
+            #         y=sig, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, n_mels=self.n_mels
+            #     )
+            #     _ = librosa.power_to_db(S_mel, ref=np.max)
+
+            #     S = librosa.stft(sig, n_fft=self.n_fft, hop_length=self.hop_length, window="hann", center=True)
+            #     mag, phase = librosa.magphase(S)
+            #     freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
+            # else:
+            S = librosa.stft(sig, n_fft=self.n_fft, hop_length=self.hop_length, window="hann", center=True)
+            mag, phase = librosa.magphase(S)
+            freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
+            
+            batch_importances = []
+            importance_map = np.zeros_like(mag, dtype=float)
+
+            for (low, high) in self.bands:
+                trans = self._band_transition_width(low, high)
+                keep = smooth_band_keep_mask(freqs, low, high, trans=trans)  # 1 outside band, 0 inside band
+                keep_band = keep + self.attenuation * (1.0 - keep)
+                mag_p = mag * keep_band[:, None]
+
+                S_p = mag_p * phase
+                y_p = librosa.istft(S_p, hop_length=self.hop_length, window="hann", center=True)
+
+                if self.normalize_loudness:
+                    y_p = match_rms(sig, y_p)
+
+                try:
+                    pert_prob = self._predict(y_p)
+                except Exception as pred_err:
+                    error_msg = f"Perturbation prediction error for band {low}-{high}Hz: {type(pred_err).__name__}: {pred_err}"
+                    print(f"[Warning] {error_msg}")
+                
+                    if file_attempt < max_file_retries - 1 and retry_on_error:
+                        print(f"[Info] Retrying file {audio_path} (attempt {file_attempt + 2}/{max_file_retries})")
+                        time.sleep(2.0 * (file_attempt + 1))
+                        break
+                    else:
+                        if self.checkpoint:
+                            self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
+                        raise
+                    
+                delta = float(orig_prob - pert_prob)
+
+                batch_importances.append({
+                    "component": name,
+                    "low": float(low),
+                    "high": float(high),
+                    "importance": float(delta)
+                })
+
+                band_mask = (freqs >= low) & (freqs <= high)
+                importance_map[band_mask, :] += delta
+
+            spectrogram_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+
+            return FBDResult(
+                importance_map=importance_map,
+                spectrogram_db=spectrogram_db,
+                baseline_pred=orig_prob,
+                y=sig,
+                S=S,
+                batch_importances=batch_importances
+            )
+
     @tf_retry_decorator(max_retries=20)
-    def process_audio(self, audio_path: str, retry_on_error: bool = True, max_file_retries: int = 5) -> pd.DataFrame:
+    def process_audio_file(
+        self, 
+        audio_path: str, 
+        output_dir: Path,
+        folder_name: str = "",
+        retry_on_error: bool = True, 
+        max_file_retries: int = 5) -> Optional[Dict[str, Any]]:
         """
         Process a single audio file with optional retries on error.
         
         Args:
             audio_path: Path to the audio file
             retry_on_error: Whether to retry on error
+            output_dir: Directory to save the output
+            folder_name: Name of the folder containing the audio file
             max_file_retries: Maximum number of attempts for a single file
         
         Returns:
             DataFrame with results or empty DataFrame in case of error
         """
+
+        file_name = Path(audio_path).stem
+
+        if self.checkpoint:
+            processed = self.checkpoint.load_processed_files()
+            if str(audio_path) in processed:
+                print(f"    ⏭️  Already processed, skipping...")
+                return None
         
         for file_attempt in range(max_file_retries):
             try: 
-                results: List[Dict[str, Any]] = []
 
-                y, _ = librosa.load(audio_path, sr=self.cfg.sr, mono=True, duration=self.cfg.model_time)
-                n_fft = self.cfg.n_fft
-                hop = self.cfg.hop_length
+                result = self._compute_importance(
+                    audio_path=audio_path,
+                    file_attempt=file_attempt,
+                    max_file_retries=max_file_retries,
+                    retry_on_error=retry_on_error
+                )
 
-                components = self._separate_sources(y)
-                target_names = [nm for nm in list(components.keys()) if nm in self.cfg.separation_targets]
-                if not target_names:
-                    target_names = list(components.keys())
+                if result.batch_importances is None:
+                    if self.checkpoint:
+                        self.checkpoint.mark_as_processed(audio_path, success=False, error_msg="No importance values computed") 
+                    return None
 
-                for name in target_names:
-                    sig = components[name]
-                    
-                    try:
-                        orig_prob = self._predict(sig)
-                    except Exception as pred_err:
-                        error_msg = f"Prediction error for component {name}: {type(pred_err).__name__}: {pred_err}"
-                        print(f"[Warning] {error_msg}")
-                    
-                        if file_attempt < max_file_retries - 1 and retry_on_error:
-                            print(f"[Info] Retrying file {audio_path} (attempt {file_attempt + 2}/{max_file_retries})")
-                            time.sleep(2.0 * (file_attempt + 1))
-                            break
-                        else:
-                            if self.checkpoint:
-                                self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
-                            raise
+                if folder_name:
+                    model_output_dir = output_dir / folder_name
+                    model_output_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    model_output_dir = output_dir
 
-                    if self.cfg.use_mel:
-                        S_mel = librosa.feature.melspectrogram(
-                            y=sig, sr=self.cfg.sr, n_fft=n_fft, hop_length=hop, n_mels=self.cfg.n_mels
-                        )
-                        _ = librosa.power_to_db(S_mel, ref=np.max)
-
-                        S = librosa.stft(sig, n_fft=n_fft, hop_length=hop, window="hann", center=True)
-                        mag, phase = librosa.magphase(S)
-                        freqs = librosa.fft_frequencies(sr=self.cfg.sr, n_fft=n_fft)
+                track_output_dir = model_output_dir / file_name
+                track_output_dir.mkdir(parents=True, exist_ok=True)
+                
+                if result.importance_map is not None:
+                    if result.y is not None and result.S is not None:
+                        y = result.y
+                        S = result.S
                     else:
-                        S = librosa.stft(sig, n_fft=n_fft, hop_length=hop, window="hann", center=True)
-                        mag, phase = librosa.magphase(S)
-                        freqs = librosa.fft_frequencies(sr=self.cfg.sr, n_fft=n_fft)
+                        y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
+                        S = librosa.stft(
+                            y, n_fft=self.n_fft, hop_length=self.hop_length, 
+                            window="hann", center=True
+                        )
 
-                    for (low, high) in self.bands:
-                        trans = self._band_transition_width(low, high)
-                        keep = smooth_band_keep_mask(freqs, low, high, trans=trans)  # 1 outside band, 0 inside band
-                        keep_band = keep + self.cfg.attenuation * (1.0 - keep)
-                        mag_p = mag * keep_band[:, None]
+                    freqs_dir = track_output_dir / "freq_batches"
+                    freqs_dir.mkdir(parents=True, exist_ok=True)
 
-                        S_p = mag_p * phase
-                        y_p = librosa.istft(S_p, hop_length=hop, window="hann", center=True)
+                    save_frequency_band_importances(
+                        y=y,
+                        S=S,
+                        batch_importances=result.batch_importances,
+                        sr=self.sr,
+                        n_fft=self.n_fft,
+                        hop_length=self.hop_length,
+                        win_length=self.win_length,
+                        n_iter=self.n_iter,
+                        file_name=file_name,
+                        save_dir=freqs_dir,
+                        use_original_audio=False  # albo True, jeśli chcesz pełny sygnał
+                    )
 
-                        if self.cfg.normalize_loudness:
-                            y_p = match_rms(sig, y_p)
+                    visualize_file_bands(
+                        bands=result.batch_importances,
+                        file_name = file_name,
+                        folder = folder_name,
+                        output_dir = track_output_dir
+                    )
 
-                        
-                        try:
-                            pert_prob = self._predict(y_p)
-                        except Exception as pred_err:
-                            error_msg = f"Perturbation prediction error for band {low}-{high}Hz: {type(pred_err).__name__}: {pred_err}"
-                            print(f"[Warning] {error_msg}")
-                        
-                            if file_attempt < max_file_retries - 1 and retry_on_error:
-                                print(f"[Info] Retrying file {audio_path} (attempt {file_attempt + 2}/{max_file_retries})")
-                                time.sleep(2.0 * (file_attempt + 1))
-                                break
-                            else:
-                                if self.checkpoint:
-                                    self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
-                                raise
-                            
-                        delta = float(orig_prob - pert_prob)
-
-                        results.append({
-                            "file_path": str(audio_path),
-                            "band": f"{low}-{high}Hz",
-                            "original_prob": float(orig_prob),
-                            "perturbed_prob": float(pert_prob),
-                            "delta": delta,
-                            "component": name,
-                        })
+                    visualize_fbp_saliency(
+                        importance_map=result.importance_map,
+                        S=result.S,
+                        output_path=str(track_output_dir / f"fbp_saliency_{file_name}.png"),
+                        title=f"{file_name} | FBP | Pred: {result.baseline_pred:.3f}",
+                        sr=self.sr,
+                        hop_length=self.hop_length,
+                        highlight_percent=20.0,
+                        abs_threshold=None,
+                    )
+                else:
+                    pass
 
                 if self.checkpoint:
                     self.checkpoint.mark_as_processed(audio_path, success=True)
-                    self.checkpoint.log_success(audio_path, num_results=len(results))
 
-                return pd.DataFrame(results)
+                return {
+                    'file_path': str(audio_path),
+                    'file_name': file_name,
+                    'folder': folder_name,
+                    'baseline_pred': float(result.baseline_pred),
+                    'mean_importance': float(result.importance_map.mean()),
+                    'max_importance': float(result.importance_map.max()),
+                    'min_importance': float(result.importance_map.min()),
+                    'std_importance': float(result.importance_map.std()),
+                    'bands': result.batch_importances
+                }
             
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {str(e)}"
@@ -408,289 +657,446 @@ class FrequencyBandPerturbation:
                     if self.checkpoint:
                         self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
 
-                    return pd.DataFrame()
-        return pd.DataFrame()
-
-    def load_previous_results(self, output_dir: str | Path, experiment_name: str) -> Optional[pd.DataFrame]:
-        """
-        Load previous experiment results if they exist.
-
-        Args:
-            output_dir: Directory with results
-            experiment_name: Experiment name
-
-        Returns:
-            DataFrame with previous results or None if they don't exist
-        """
-        exp_dir = Path(output_dir) / experiment_name
-        
-        if not exp_dir.exists():
-            return None
-
-        csv_files = sorted(exp_dir.glob("fbp_results_*.csv"))
-        
-        if not csv_files:
-            return None
-
-        latest_csv = csv_files[-1]
-        
-        try:
-            df = pd.read_csv(latest_csv)
-            print(f"📥 Loaded previous results: {latest_csv.name}")
-            print(f"   Number of results: {len(df)}")
-            return df
-        except Exception as e:
-            print(f"⚠️  Failed to load previous results: {e}")
-            return None
+                    return None
+        return None
 
     def run_experiment(
         self, 
         base_path: str | Path, 
-        limit_per_folder: Optional[int] = None,
-        resume: bool = True,
-        force_reprocess: bool = False,
-        previous_results: Optional[pd.DataFrame] = None
+        output_dir: str | Path,
+        models_to_process: Optional[list] = None,
+        max_samples_per_model: Optional[int] = None,
+        results_path: Optional[str | Path] = None
     ) -> pd.DataFrame:
         """
         Run experiment with checkpointing.
-        
-        Args:
-            base_path: Path to the data folder
-            limit_per_folder: Limit files per folder
-            resume: Whether to resume from the last checkpoint
-            force_reprocess: Force reprocess all files (ignore checkpoint)
         """
-        base = Path(base_path)
-        all_rows: List[pd.DataFrame] = []
-        
-        if previous_results is not None and not force_reprocess:
-            print(f"🔗 Connecting to previous results ({len(previous_results)} rows)")
-            all_rows.append(previous_results)
 
-        processed_files = set()
-        if self.checkpoint and resume and not force_reprocess:
-            processed_files = self.checkpoint.load_processed_files()
-            if processed_files:
-                print(f"\n📋 Resumed checkpoint: {len(processed_files)} files already processed")
-                stats = self.checkpoint.get_stats()
-                print(f"   Success: {stats['total_processed'] - stats['total_failed']}, Errors: {stats['total_failed']}")
-        
-        total_files = 0
-        files_to_process = {}
-        
-        for folder in base.iterdir():
-            if not folder.is_dir():
-                continue
-            audio_files = list(folder.glob("*"))
-            if limit_per_folder is not None:
-                audio_files = audio_files[:int(limit_per_folder)]
+        base_path = Path(base_path)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-            if resume and not force_reprocess:
-                audio_files = [f for f in audio_files if str(f) not in processed_files]
+        if results_path is None:
+            results_path = output_dir / "FBP_results.json"
+        results_path = Path(results_path)
+
+        bands_dir = output_dir / "bands"
+        bands_dir.mkdir(parents=True, exist_ok=True)
+
+        print("\n" + "=" * 70)
+        print("🔬 Frequency Band Perturbation Experiment")
+        print("=" * 70)
+        print(f"📁 Dataset: {base_path}")
+        print(f"📊 Output: {output_dir}")
+        print(f"🎛️  Bands: {bands_dir}")
+        print(f"💾 Checkpoint: {'Enabled' if self.checkpoint else 'Disabled'}")
+
+        tmp_file = output_dir / "FBP_results_progress.csv"
+        prev_results = []
+        if os.path.exists(tmp_file):
+            prev_results = pd.read_csv(tmp_file).to_dict("records")
+
+        results = prev_results
+
+        tmp_save_freq = 1
+        tmp_file = output_dir / "FBP_results_progress.csv"
+        
+        try:
+            for folder in sorted(base_path.iterdir()):
+                if not folder.is_dir():
+                    continue
+
+                if models_to_process and folder.name not in models_to_process:
+                    continue
+
+                print(f"\n📁 Processing folder: {folder.name}")
+
+                audio_files = sorted(list(folder.glob("*.mp3")) + list(folder.glob("*.wav")))
+
+                if max_samples_per_model:
+                    audio_files = audio_files[:max_samples_per_model]
+
+                print(f"   Found {len(audio_files)} files")
+
+                for idx, audio_file in enumerate(audio_files, 1):
+                    print(f"\n  🎵 [{idx}/{len(audio_files)}] {audio_file.name}")
+                    
+                    result = self.process_audio_file(
+                        audio_path=str(audio_file), 
+                        output_dir=bands_dir,
+                        folder_name = folder.name,
+                        retry_on_error=True, 
+                        max_file_retries=5
+                    )
+
+                    if result:
+                        results.append(result)
+
+                        if results_path:
+                            model_name = result['folder']
+                            file_key = result['file_name']
+
+                            wrapper = {
+                                model_name: {
+                                    file_key: result
+                                }
+                            }
+
+                            append_update_fbp_results(
+                                new_results=wrapper,
+                                results_path=results_path,
+                            )
+                        if len(results) % tmp_save_freq == 0:
+                                pd.DataFrame(results).to_csv(tmp_file, index=False)
+                                print(f"🔄 Auto-saved progress to {tmp_file}")
+
+            if not results:
+                print("\n⚠️  No results to return!")
+                return pd.DataFrame()
             
-            files_to_process[folder] = audio_files
-            total_files += len(audio_files)
+            df = pd.DataFrame(results)
 
-        print(f"\n🔊 Files to process: {total_files}")
+            csv_path = output_dir / f"fbp_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            df.to_csv(csv_path, index=False)
 
-        processed_count = 0
-        failed_count = 0
-        
-        for folder, audio_files in files_to_process.items():
-            if not audio_files:
+            print("\n" + "=" * 70)
+            print("✅ Experiment completed!")
+            print("=" * 70)
+            print(f"📊 Processed files: {len(df)}")
+            print(f"📄 Results saved: {csv_path}")
+            print(f"🎛️  Bands: {bands_dir}")
+            print("=" * 70 + "\n")
+
+            return df
+            
+        except Exception as e:
+            print(f"\n\n❌ Critical error: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            if results:
+                pd.DataFrame(results).to_csv(tmp_file, index=False)
+                print(f"⚠️  Crash! Progress auto-saved to {tmp_file}")
+            raise
+
+    def expand_band_level_results(self, results_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Z `results_df` (1 wiersz = 1 plik) buduje DataFrame,
+        gdzie 1 wiersz = 1 pasmo (band) dla danego pliku/modelu/komponentu.
+        """
+        rows = []
+        for _, row in results_df.iterrows():
+            bands = row.get('bands', None)
+            if not bands:
                 continue
-
-            print(f"\n📁 Processing folder: {folder.name} ({len(audio_files)} files)")
-
-            for idx, f in enumerate(audio_files, 1):
-                print(f"  🎵 [{idx}/{len(audio_files)}] {f.name}")
-                
-                df = self.process_audio(str(f), retry_on_error=True, max_file_retries=5)
-                
-                if not df.empty:
-                    df["folder"] = folder.name
-                    all_rows.append(df)
-                    processed_count += 1
-                    print(f"     ✅ Success ({len(df)} results)")
-                else:
-                    failed_count += 1
-                    print(f"     ❌ Error (file skipped)")
-
-                total_done = len(processed_files) + processed_count + failed_count
-                print(f"  📊 Global progress: {total_done}/{len(processed_files) + total_files} " +
-                    f"(Success: {processed_count}, Errors: {failed_count})")
-
-        if not all_rows:
-            print("\n⚠️  No results to return!")
+            for b in bands:
+                low = float(b['low'])
+                high = float(b['high'])
+                rows.append({
+                    'file_path': row['file_path'],
+                    'file_name': row['file_name'],
+                    'folder': row['folder'],
+                    'component': b.get('component', 'mixture'),
+                    'low': low,
+                    'high': high,
+                    'band': f'{int(low)}-{int(high)}Hz',
+                    'delta': float(b['importance']),
+                })
+        if not rows:
             return pd.DataFrame()
-        
-        final_df = pd.concat(all_rows, ignore_index=True)
-
-        if 'file_path' in final_df.columns and 'band' in final_df.columns:
-            before_dedup = len(final_df)
-            final_df = final_df.drop_duplicates(subset=['file_path', 'band', 'component'], keep='last')
-            after_dedup = len(final_df)
-            if before_dedup != after_dedup:
-                print(f"🔄 Removed {before_dedup - after_dedup} duplicates")
-
-        print(f"\n✅ Experiment completed!")
-        print(f"   Processed files: {processed_count}")
-        print(f"   Failed files: {failed_count}")
-        print(f"   Total results: {len(final_df)}")
-
-        if self.checkpoint:
-            failed_files = self.checkpoint.get_failed_files()
-            if failed_files:
-                print(f"\n❌ Files with errors ({len(failed_files)}):")
-                for failed in failed_files[-10:]:
-                    print(f"   - {Path(failed['file_path']).name}: {failed['error'][:80]}")
-        
-        return final_df
-
-    def save_experiment_results(
-        self,
-        results_df: pd.DataFrame,
-        output_dir: str | Path,
-        experiment_name: str = "exp",
-        extra_meta: Optional[Dict[str, Any]] = None,
-        is_merged: bool = False
-    ) -> Dict[str, str]:
-
-        out = Path(output_dir)
-        exp_dir = out / experiment_name
-        exp_dir.mkdir(parents=True, exist_ok=True)
-
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        suffix = "_merged" if is_merged else ""
-        csv_path = exp_dir / f"fbp_results{suffix}_{ts}.csv"
-        params_path = exp_dir / f"fbp_params{suffix}_{ts}.json"
-
-        results_df.to_csv(csv_path, index=False)
-
-        bands_with_transition = []
-        for (low, high) in self.bands:
-            eff_trans = self._band_transition_width(low, high)
-            bands_with_transition.append({
-                "low": float(low),
-                "high": float(high),
-                "bandwidth": float(high - low),
-                "transition_effective_hz": float(eff_trans),
-            })
-
-        params: Dict[str, Any] = {
-            "timestamp": ts,
-            "experiment_name": experiment_name,
-            "sr": self.cfg.sr,
-            "model_time": self.cfg.model_time,
-            "use_mel": self.cfg.use_mel,
-            "n_mels": self.cfg.n_mels if self.cfg.use_mel else None,
-            "use_separation": self.cfg.use_separation,
-            "separation_model": self.cfg.separation_model,
-            "separation_targets": list(self.cfg.separation_targets) if self.cfg.separation_targets else None,
-            "bands": bands_with_transition,
-            "n_fft": self.cfg.n_fft,
-            "hop_length": self.cfg.hop_length,
-            "rows": int(len(results_df)),
-            "folders_covered": sorted(results_df["folder"].unique().tolist()) if "folder" in results_df.columns else None,
-            "attenuation": self.cfg.attenuation,
-            "transition_mode": self.cfg.transition_mode,
-            "transition_hz": self.cfg.transition_hz,
-            "transition_rel": self.cfg.transition_rel,
-            "transition_min_hz": self.cfg.transition_min_hz,
-            "transition_max_hz": self.cfg.transition_max_hz,
-            "normalize_loudness": self.cfg.normalize_loudness,
-        }
-        if extra_meta:
-            params["extra_meta"] = extra_meta
-
-        with open(params_path, "w", encoding="utf-8") as f:
-            json.dump(params, f, ensure_ascii=False, indent=2)
-
-        return {
-            "results_csv": str(csv_path),
-            "params_json": str(params_path),
-            "experiment_dir": str(exp_dir),
-        }
+        return pd.DataFrame(rows)
 
     def visualize_results(self, results_df: pd.DataFrame, output_dir: str | Path = "fbp_results") -> None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        band_order = sorted(results_df["band"].unique(), key=lambda x: int(str(x).split("-")[0]))
 
+        # 1) WIZUALIZACJE PER PLIK (agregaty)
+        if {'folder', 'mean_importance'}.issubset(results_df.columns):
+            plt.figure(figsize=(10, 6))
+            sns.boxplot(
+                data=results_df,
+                x='folder',
+                y='mean_importance'
+            )
+            plt.title("Rozkład średniej ważności pasm per model (folder)")
+            plt.xlabel("Model (folder)")
+            plt.ylabel("Mean importance (Δ)")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(out / "boxplot_mean_importance_by_folder.png", dpi=300)
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            sns.violinplot(
+                data=results_df,
+                x='folder',
+                y='baseline_pred',
+                inner='quartile'
+            )
+            plt.title("Rozkład predykcji bazowej per model (folder)")
+            plt.xlabel("Model (folder)")
+            plt.ylabel("Baseline prediction")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(out / "violin_baseline_pred_by_folder.png", dpi=300)
+            plt.close()
+
+        # 2) WIZUALIZACJE PER PASMO (z batch_importances)
+        band_df = self.expand_band_level_results(results_df)
+        if band_df.empty:
+            print("⚠️ Brak danych pasmowych (bands) do wizualizacji.")
+            return
+
+        band_order = sorted(
+            band_df["band"].unique(),
+            key=lambda x: int(str(x).split("-")[0])
+        )
+
+        # 2a) Boxplot: Δ per band, z podziałem na komponent
         plt.figure(figsize=(14, 7))
-        sns.boxplot(data=results_df, x="band", y="delta", hue="component")
-        plt.title("Distribution of delta for band and component")
+        sns.boxplot(
+            data=band_df,
+            x="band",
+            y="delta",
+            hue="component"
+        )
+        plt.title("Rozkład Δ (importance) dla pasm i komponentów")
         plt.xlabel("Band (Hz)")
-        plt.ylabel("Change in Probability (Δ)")
+        plt.ylabel("Change in probability (Δ)")
         plt.xticks(rotation=45)
         plt.legend(title="Component")
         plt.tight_layout()
         plt.savefig(out / "boxplot_delta_by_band_component.png", dpi=300)
         plt.close()
 
-        for comp in results_df["component"].unique():
-            comp_df = results_df[results_df["component"] == comp]
-            pivot = comp_df.pivot_table(index="folder", columns="band", values="delta", aggfunc="mean")
-            plt.figure(figsize=(12, 8))
-            sns.heatmap(pivot[band_order], annot=True, fmt=".3f", cmap="coolwarm", center=0,
-                        linewidths=0.5, cbar_kws={"label": "Δ"})
-            plt.title(f"Heatmap: component [{comp}]")
-            plt.tight_layout()
-            plt.savefig(out / f"heatmap_delta_{comp}.png", dpi=300)
-            plt.close()
+        # 2b) Heatmap: średnia Δ per model (folder) i band
+        pivot_model_band = band_df.pivot_table(
+            index="folder",
+            columns="band",
+            values="delta",
+            aggfunc="mean"
+        ).reindex(columns=band_order)
 
-        grouped = results_df.groupby(["component", "band"])["delta"].mean().unstack().fillna(0)
-        grouped = grouped[band_order]
-        grouped.T.plot(kind="bar", figsize=(14, 8), width=0.8)
-        plt.title("Comparison of mean Δ (per band and component)")
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(
+            pivot_model_band,
+            annot=True,
+            fmt=".3f",
+            cmap="coolwarm",
+            center=0,
+            linewidths=0.5,
+            cbar_kws={"label": "Mean Δ"}
+        )
+        plt.title("Średnia Δ per model (folder) i pasmo")
+        plt.xlabel("Band (Hz)")
+        plt.ylabel("Model (folder)")
+        plt.tight_layout()
+        plt.savefig(out / "heatmap_delta_by_folder_band.png", dpi=300)
+        plt.close()
+
+        # 2c) Heatmap: średnia Δ per komponent i band
+        pivot_comp_band = band_df.pivot_table(
+            index="component",
+            columns="band",
+            values="delta",
+            aggfunc="mean"
+        ).reindex(columns=band_order)
+
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(
+            pivot_comp_band,
+            annot=True,
+            fmt=".3f",
+            cmap="coolwarm",
+            center=0,
+            linewidths=0.5,
+            cbar_kws={"label": "Mean Δ"}
+        )
+        plt.title("Średnia Δ per komponent i pasmo")
+        plt.xlabel("Band (Hz)")
+        plt.ylabel("Component")
+        plt.tight_layout()
+        plt.savefig(out / "heatmap_delta_by_component_band.png", dpi=300)
+        plt.close()
+
+        # 2d) Wykres słupkowy: mean Δ per band z podziałem na model
+        grouped = band_df.groupby(["band", "folder"])["delta"].mean().reset_index()
+        grouped = grouped.pivot(index="band", columns="folder", values="delta").reindex(band_order)
+
+        grouped.plot(kind="bar", figsize=(14, 8), width=0.8)
+        plt.title("Średnia Δ per pasmo z podziałem na model (folder)")
         plt.xlabel("Band (Hz)")
         plt.ylabel("Mean change in probability (Δ)")
         plt.xticks(rotation=45)
-        plt.legend(title="Component", bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.legend(title="Model (folder)", bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.grid(axis="y", alpha=0.3)
         plt.tight_layout()
-        plt.savefig(out / "band_impact_by_component.png", dpi=300)
+        plt.savefig(out / "bar_mean_delta_by_band_and_folder.png", dpi=300)
         plt.close()
 
-    def visualize_embedding(self, results_df: pd.DataFrame, output_dir: str | Path = "fbp_results", perplexity: int = 30) -> None:
-        import umap
-        from sklearn.decomposition import PCA
-        from sklearn.manifold import TSNE
-        out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
+def visualize_fbp_saliency(
+    importance_map: np.ndarray,
+    S: np.ndarray,
+    output_path: str,
+    title: str,
+    sr: int,
+    hop_length: int,
+    highlight_percent: float = 20.0,
+    abs_threshold: float | None = None,
+) -> None:
+    """
+    Wizualizacja importance_map dla FBP:
+    1) oryginalny spektrogram (STFT)
+    2) pełna mapa Δ
+    3) tylko najbardziej istotne regiony
+    4) nałożenie Δ na spektrogram
+    """
 
-        pivot = results_df.pivot_table(index=["file_path", "component", "folder"], columns="band",
-                                       values="delta", aggfunc="mean").fillna(0)
-        X = pivot.values
-        labels = pivot.index.get_level_values("folder") if "folder" in pivot.index.names else None
-        components = pivot.index.get_level_values("component")
+    # 1) spektrogram w dB
+    spectrogram_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
 
-        palette = sns.color_palette("Set2", n_colors=len(set(labels)) if labels is not None else 10)
+    # maska jak w visualize_spectrogram_saliency
+    if abs_threshold is not None:
+        mask = np.abs(importance_map) >= abs_threshold
+        maskinfo = f"|Δ pred| ≥ {abs_threshold:.2f}"
+    else:
+        pos_thr = np.percentile(importance_map, 100 - highlight_percent)
+        neg_thr = np.percentile(importance_map, highlight_percent)
+        mask = (importance_map >= pos_thr) | (importance_map <= neg_thr)
+        maskinfo = f"Top ±{highlight_percent:.0f}%"
 
-        pca = PCA(n_components=2)
-        X_pca = pca.fit_transform(X)
-        plt.figure(figsize=(8, 6))
-        sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=labels, style=components, palette=palette)
-        plt.title("PCA: projection of band deltas")
-        plt.tight_layout()
-        plt.savefig(out / "embedding_pca.png", dpi=300)
-        plt.close()
+    filtered_map = np.full_like(importance_map, np.nan)
+    filtered_map[mask] = importance_map[mask]
 
-        tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42)
-        X_tsne = tsne.fit_transform(X)
-        plt.figure(figsize=(8, 6))
-        sns.scatterplot(x=X_tsne[:, 0], y=X_tsne[:, 1], hue=labels, style=components, palette=palette)
-        plt.title("t-SNE: projection of band deltas")
-        plt.tight_layout()
-        plt.savefig(out / "embedding_tsne.png", dpi=300)
-        plt.close()
+    alpha_mask = np.zeros_like(importance_map, dtype=float) + 0.25
+    alpha_mask[mask] = 1.0
 
-        reducer = umap.UMAP(n_components=2, random_state=42)
-        X_umap = reducer.fit_transform(X)
-        plt.figure(figsize=(8, 6))
-        sns.scatterplot(x=X_umap[:, 0], y=X_umap[:, 1], hue=labels, style=components, palette=palette)
-        plt.title("UMAP: projection of band deltas")
-        plt.tight_layout()
-        plt.savefig(out / "embedding_umap.png", dpi=300)
-        plt.close()
+    fig, axes = plt.subplots(4, 1, figsize=(18, 16))
+
+    # 1. Oryginalny spektrogram (czas–częstotliwość)
+    img1 = librosa.display.specshow(
+        spectrogram_db,
+        sr=sr,
+        hop_length=hop_length,
+        x_axis="time",
+        y_axis="hz",
+        ax=axes[0],
+        cmap="viridis",
+    )
+    axes[0].set_title("Original STFT Spectrogram", fontsize=13, fontweight="bold")
+    axes[0].set_ylabel("Frequency (Hz)", fontsize=11)
+    plt.colorbar(img1, ax=axes[0], format="%+2.0f dB")
+
+    # 2. Pełna mapa Δ
+    fullmap_absmax = np.max(np.abs(importance_map))
+    im2 = axes[1].imshow(
+        importance_map,
+        aspect="auto",
+        origin="lower",
+        cmap="seismic",
+        interpolation="none",
+        vmin=-fullmap_absmax,
+        vmax=fullmap_absmax,
+    )
+    axes[1].set_title("Full Importance (Δ Prediction)", fontsize=13, fontweight="bold")
+    axes[1].set_ylabel("Freq bin", fontsize=11)
+    plt.colorbar(im2, ax=axes[1], label="Importance (Δ prediction)", orientation="vertical")
+
+    # 3. Tylko wyróżnione regiony
+    im3 = axes[2].imshow(
+        filtered_map,
+        aspect="auto",
+        origin="lower",
+        cmap="seismic",
+        interpolation="none",
+        vmin=-fullmap_absmax,
+        vmax=fullmap_absmax,
+    )
+    axes[2].set_title(f"Highlighted Importance ({maskinfo})", fontsize=13, fontweight="bold")
+    axes[2].set_ylabel("Freq bin", fontsize=11)
+    plt.colorbar(im3, ax=axes[2], label="Importance", orientation="vertical")
+
+    # 4. Overlay: Δ na spektrogramie
+    if abs_threshold is not None or highlight_percent is not None:
+        is_core = mask
+        alpha_mask = np.zeros_like(importance_map, dtype=float) + 0.20
+        alpha_mask[is_core] = 0.65
+
+    axes[3].imshow(
+        spectrogram_db,
+        aspect="auto",
+        origin="lower",
+        cmap="gray",
+        alpha=0.92,
+    )
+    axes[3].imshow(
+        importance_map,
+        aspect="auto",
+        origin="lower",
+        cmap="seismic",
+        alpha=alpha_mask,
+        vmin=-fullmap_absmax,
+        vmax=fullmap_absmax,
+        interpolation="none",
+    )
+    axes[3].set_title(
+        f"Spectrogram + FBP saliency\nHighlighted: {maskinfo} (alpha=1 core, 0.25 background)",
+        fontsize=13,
+        fontweight="bold",
+    )
+    axes[3].set_ylabel("Freq bin", fontsize=11)
+    axes[3].set_xlabel("Time frame", fontsize=11)
+
+    stats_text = (
+        f"Mean: {importance_map.mean():.4f} | "
+        f"Max: {importance_map.max():.4f} | "
+        f"Min: {importance_map.min():.4f}\n"
+        f"{maskinfo} | Highlighted: {np.sum(mask)} ({100 * np.mean(mask):.1f}%)"
+    )
+    axes[3].text(
+        0.02,
+        0.94,
+        stats_text,
+        transform=axes[3].transAxes,
+        fontsize=9,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
+    )
+
+    plt.suptitle(title, fontsize=16, fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"✅ Saved FBP saliency: {output_path}")
+
+def visualize_file_bands(
+    bands: list[dict],
+    file_name: str,
+    folder: str,
+    output_dir: Path | str
+) -> None:
+    """
+    Wizualizacja wpływu pasm dla pojedynczego pliku:
+    - barplot (Δ per band)
+    - opcjonalnie oddzielnie: dodatnie / ujemne Δ
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not bands:
+        return
+
+    df = pd.DataFrame(bands)
+    df["band"] = df.apply(lambda r: f"{int(r['low'])}-{int(r['high'])}Hz", axis=1)
+    df.sort_values("low", inplace=True)
+
+    plt.figure(figsize=(10, 5))
+    sns.barplot(data=df, x="band", y="importance", hue="component")
+    plt.title(f"{file_name} | {folder} | Δ per band")
+    plt.xlabel("Band (Hz)")
+    plt.ylabel("Change in probability (Δ)")
+    plt.xticks(rotation=45)
+    plt.axhline(0, color="black", linewidth=0.8)
+    plt.tight_layout()
+    out_path = output_dir / f"{file_name}__band_importance.png"
+    plt.savefig(out_path, dpi=300)
+    plt.close()
