@@ -38,7 +38,7 @@ def extract_all_features(audio, sr, reference_audio=None):
     features['spectral_centroid'] = {
         'min': np.min(spectral_centroid),
         'mean': np.mean(spectral_centroid),
-        'std': np.mean(spectral_centroid),
+        'std': np.std(spectral_centroid),
         'max': np.max(spectral_centroid),
     }
 
