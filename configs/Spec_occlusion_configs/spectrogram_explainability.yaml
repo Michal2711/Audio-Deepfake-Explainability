@@ -4,12 +4,12 @@
 dataset:
   base_path: "Data/FakeRealMusicOriginal"  # Base path to dataset
   models_to_process:
-    # - UDIO
-    # - SUNO
-    # - SUNO_PRO
-    # - ElevenLabs
+    - UDIO
+    - SUNO
+    - SUNO_PRO
+    - ElevenLabs
     - REAL
-  max_samples_per_model: 1
+  max_samples_per_model: 10
 
 # Model configuration  
 model:
@@ -37,6 +37,10 @@ spectrogram:
   n_fft: 2048
   hop_length: 512
   win_length: 2048
+
+  spec_type: "stft"  # "mel" or "stft"
+  fmax: null  # Only used for mel spectrograms
+
   n_mels: 512
   n_iter: 256
 
@@ -52,8 +56,15 @@ explainability:
   
   # Occlusion parameters
   occlusion:
-    patch_size: [2048, 128]   # [time_frames, freq_bins] [2048, 128] = 23.22s, 128 bins
-    stride: [2048, 128]       # [time_stride, freq_stride] [2048, 128]
+    patch_time_frames: 2048
+    stride_time_frames: 2048
+
+    patch_freq_percent: 25.0
+    stride_freq_percent: 25.0
+
+    # patch_time_frames: 2048
+    # patch_size: [2048, 128]   # [time_frames, freq_bins] [2048, 128] = 23.22s, 128 bins
+    # stride: [2048, 128]       # [time_stride, freq_stride] [2048, 128]
     use_original_audio: false  # Whether to save original audio or reconstructed from melspectrogram (False if freq_bins != n_mels)
     top_n_windows: 5          # Number of most important occluded windows to save
 
@@ -70,7 +81,7 @@ explainability:
 # Output configuration
 output:
   result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
-  experiment_name: "TIMER_TEST"
+  experiment_name: "STFT_Occlusion_2048_25pct_V2"
   
 # Checkpoint
 checkpoint:
