@@ -14,7 +14,7 @@ import random
 
 from gradio_client import Client, handle_file
 import httpx
-from httpx import HTTPStatusError, WriteTimeout, ConnectTimeout
+from httpx import HTTPStatusError, WriteTimeout, ConnectTimeout, ReadTimeout
 import socket
 
 from sonics import HFAudioClassifier
@@ -85,7 +85,7 @@ class RemoteSonnics:
                 )
                 return float(fake_prob)
             
-            except (WriteTimeout, ConnectTimeout) as e:
+            except (WriteTimeout, ConnectTimeout, ReadTimeout) as e:
                 if tmp_path and os.path.exists(tmp_path):
                     try:
                         os.unlink(tmp_path)
@@ -97,13 +97,13 @@ class RemoteSonnics:
                         self.initial_delay * (2 ** attempt) + random.uniform(0, 1), 
                         self.max_delay
                     )
-                    print(f"[Warning] WriteTimeout - file too large (attempt {attempt + 1}/{self.max_retries})")
+                    print(f"[Warning] {type(e).__name__} - file too large (attempt {attempt + 1}/{self.max_retries})")
                     print(f"[Info] Retrying after {delay:.2f}s...")
                     time.sleep(delay)
                     continue
                 else:
-                    print(f"[Error] WriteTimeout - failed after {self.max_retries} attempts")
-                    raise RuntimeError("WriteTimeout: Could not upload audio") from e
+                    print(f"[Error] {type(e).__name__} - failed after {self.max_retries} attempts")
+                    raise RuntimeError(f"{type(e).__name__}: Could not upload audio") from e
                     
             except HTTPStatusError as e:
                 if tmp_path and os.path.exists(tmp_path):
