@@ -1,6 +1,7 @@
 # src/dsp_band_ops.py
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -16,10 +17,11 @@ import soundfile as sf
 import torch
 import os
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns
 
-# from spectrogram_explainability import timed
+import seaborn as sns
 
 try:
     from audioLIME.factorization_spleeter import SpleeterFactorization
@@ -290,13 +292,13 @@ def tf_retry_decorator(max_retries: int = 20):
         return wrapper
     return decorator
 
-class Predictor:
-    """
-    Minimal interface required by FrequencyBandPerturbation.
-    Implementations: LocalSonnics / RemoteSonnics in src/model_api.py.
-    """
-    def predict(self, audio_wave: np.ndarray, sr: int) -> float:
-        raise NotImplementedError
+# class Predictor:
+#     """
+#     Minimal interface required by FrequencyBandPerturbation.
+#     Implementations: LocalSonnics / RemoteSonnics in src/model_api.py.
+#     """
+#     def predict(self, audio_wave: np.ndarray, sr: int) -> float:
+#         raise NotImplementedError
 
 class FBDResult(NamedTuple):
     importance_map: Optional[np.ndarray]
@@ -486,13 +488,13 @@ class FrequencyBandPerturbation:
             low = p["low"]
             high = p["high"]
             importance = p["importance"]
+            component = p.get("component", "mixture")
+            component_dir = save_dir / "freq_batches"
+            component_dir.mkdir(parents=True, exist_ok=True)
 
             if self.use_original_audio:
-                # Tu można by wycinać zakres czasowy, ale w FBP pracujesz globalnie na sygnale,
-                # więc po prostu zapisujemy cały sygnał z adnotacją pasma.
                 y_band = y.copy()
             else:
-                # Rekonstrukcja tylko z danego pasma w S
                 mag, phase = librosa.magphase(S)
                 band_mask = (freqs >= low) & (freqs <= high)
                 mag_band = np.zeros_like(mag)
@@ -500,28 +502,22 @@ class FrequencyBandPerturbation:
 
                 S_band = mag_band * phase
                 y_band = self._invert_spectrogram(S_band)
-                # y_band = librosa.istft(
-                #     S_band,
-                #     hop_length=self.hop_length,
-                #     win_length=self.win_length,
-                #     window="hann",
-                #     center=True
-                # )
                 
             importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
             if save_audio:
-                # Normalizacja, żeby uniknąć clippingu
+                # Normalization to prevent clipping
                 if np.max(np.abs(y_band)) > 0:
                     y_band = y_band / np.max(np.abs(y_band)) * 0.99
 
-                out_path = save_dir / (
-                    f"{file_name}__band{idx}_{int(low)}-{int(high)}Hz_{importance_type}_"
+                out_path = component_dir / (
+                    f"{file_name}__{component}__{int(low)}-{int(high)}Hz_{importance_type}_"
                     f"{importance:+.3f}.wav"
                 )
                 sf.write(str(out_path), y_band, self.sr)
             
             metadata["bands"].append({
+                "component": component,
                 "low": low,
                 "high": high,
                 "importance": importance,
@@ -533,6 +529,103 @@ class FrequencyBandPerturbation:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
+    @timed("Computing importance for single component")
+    def _compute_component_importance(
+        self,
+        sig: np.ndarray,
+        component_name: str,
+        audio_path: str,
+        file_attempt: int = 0,
+        max_file_retries: int = 3,
+        retry_on_error: bool = True,
+    ) -> Optional[FBDResult]:
+        
+        try:
+            orig_prob = self._predict(sig)
+        except Exception as pred_err:
+            error_msg = (
+                f"Prediction error for component {component_name}: "
+                f"{type(pred_err).__name__}: {pred_err}"
+            )
+            print(f"[Warning] {error_msg}")
+
+            if file_attempt < max_file_retries - 1 and retry_on_error:
+                print(
+                    f"[Info] Retrying file {audio_path} "
+                    f"(attempt {file_attempt + 2}/{max_file_retries})"
+                )
+                time.sleep(2.0 * (file_attempt + 1))
+                return None  # pozwól nadrzędnej pętli spróbować jeszcze raz
+
+            if self.checkpoint:
+                self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
+            return None
+            
+        # 2. Spektrogram
+        S, S_db = self._compute_spectrogram(sig)
+        mag, phase = librosa.magphase(S)
+        freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
+
+        # 3. Perturbacja pasm
+        batch_importances: list[dict] = []
+        importance_map = np.zeros_like(mag, dtype=float)
+
+        for (low, high) in self.bands:
+            trans = self._band_transition_width(low, high)
+            keep = smooth_band_keep_mask(freqs, low, high, trans=trans)  # 1 outside band, 0 inside
+            keep_band = keep + self.attenuation * (1.0 - keep)
+
+            mag_p = mag * keep_band[:, None]
+            S_p = mag_p * phase
+            y_p = self._invert_spectrogram(S_p)
+
+            if self.normalize_loudness:
+                y_p = match_rms(sig, y_p)
+
+            try:
+                pert_prob = self._predict(y_p)
+            except Exception as pred_err:
+                error_msg = (
+                    f"Perturbation prediction error for {component_name} "
+                    f"band {low}-{high}Hz: {type(pred_err).__name__}: {pred_err}"
+                )
+                print(f"[Warning] {error_msg}")
+
+                if file_attempt < max_file_retries - 1 and retry_on_error:
+                    print(
+                        f"[Info] Retrying file {audio_path} "
+                        f"(attempt {file_attempt + 2}/{max_file_retries})"
+                    )
+                    time.sleep(2.0 * (file_attempt + 1))
+                    return None
+
+                if self.checkpoint:
+                    self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
+                return None
+
+            delta = float(orig_prob - pert_prob)
+
+            batch_importances.append(
+                {
+                    "component": component_name,
+                    "low": float(low),
+                    "high": float(high),
+                    "importance": float(delta),
+                }
+            )
+
+            band_mask = (freqs >= low) & (freqs <= high)
+            importance_map[band_mask, :] += delta
+
+        return FBDResult(
+            importance_map=importance_map,
+            spectrogram_db=S_db,
+            baseline_pred=orig_prob,
+            y=sig,
+            S=S,
+            batch_importances=batch_importances,
+        )
+
     @timed("Computing importance for bands")
     def _compute_importance(
             self, 
@@ -540,7 +633,7 @@ class FrequencyBandPerturbation:
             file_attempt: int = 0,
             max_file_retries: int = 3,
             retry_on_error: bool = True
-        ) -> FBDResult:
+        ) -> list[FBDResult]:
 
         y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
 
@@ -550,82 +643,22 @@ class FrequencyBandPerturbation:
         if not target_names:
             target_names = list(components.keys())
 
+        results: list[FBDResult] = []
+
         for name in target_names:
             sig = components[name]
-            
-            try:
-                orig_prob = self._predict(sig)
-            except Exception as pred_err:
-                error_msg = f"Prediction error for component {name}: {type(pred_err).__name__}: {pred_err}"
-                print(f"[Warning] {error_msg}")
-            
-                if file_attempt < max_file_retries - 1 and retry_on_error:
-                    print(f"[Info] Retrying file {audio_path} (attempt {file_attempt + 2}/{max_file_retries})")
-                    time.sleep(2.0 * (file_attempt + 1))
-                    break
-                else:
-                    if self.checkpoint:
-                        self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
-                    raise
-
-            S, S_db = self._compute_spectrogram(sig)
-            # S = librosa.stft(sig, n_fft=self.n_fft, hop_length=self.hop_length, window="hann", center=True)
-            mag, phase = librosa.magphase(S)
-            freqs = librosa.fft_frequencies(sr=self.sr, n_fft=self.n_fft)
-            
-            batch_importances = []
-            importance_map = np.zeros_like(mag, dtype=float)
-
-            for (low, high) in self.bands:
-                trans = self._band_transition_width(low, high)
-                keep = smooth_band_keep_mask(freqs, low, high, trans=trans)  # 1 outside band, 0 inside band
-                keep_band = keep + self.attenuation * (1.0 - keep)
-                mag_p = mag * keep_band[:, None]
-
-                S_p = mag_p * phase
-                y_p = self._invert_spectrogram(S_p)
-                # y_p = librosa.istft(S_p, hop_length=self.hop_length, window="hann", center=True)
-
-                if self.normalize_loudness:
-                    y_p = match_rms(sig, y_p)
-
-                try:
-                    pert_prob = self._predict(y_p)
-                except Exception as pred_err:
-                    error_msg = f"Perturbation prediction error for band {low}-{high}Hz: {type(pred_err).__name__}: {pred_err}"
-                    print(f"[Warning] {error_msg}")
-                
-                    if file_attempt < max_file_retries - 1 and retry_on_error:
-                        print(f"[Info] Retrying file {audio_path} (attempt {file_attempt + 2}/{max_file_retries})")
-                        time.sleep(2.0 * (file_attempt + 1))
-                        break
-                    else:
-                        if self.checkpoint:
-                            self.checkpoint.mark_as_processed(audio_path, success=False, error_msg=error_msg)
-                        raise
-                    
-                delta = float(orig_prob - pert_prob)
-
-                batch_importances.append({
-                    "component": name,
-                    "low": float(low),
-                    "high": float(high),
-                    "importance": float(delta)
-                })
-
-                band_mask = (freqs >= low) & (freqs <= high)
-                importance_map[band_mask, :] += delta
-
-            # spectrogram_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
-
-            return FBDResult(
-                importance_map=importance_map,
-                spectrogram_db=S_db,
-                baseline_pred=orig_prob,
-                y=sig,
-                S=S,
-                batch_importances=batch_importances
+            comp_result = self._compute_component_importance(
+                sig=sig,
+                component_name=name,
+                audio_path=audio_path,
+                max_file_retries=max_file_retries,
+                retry_on_error=retry_on_error
             )
+
+            if comp_result is not None:
+                results.append(comp_result)
+
+        return results
 
     @tf_retry_decorator(max_retries=20)
     @timed("Processing audio file")
@@ -663,15 +696,14 @@ class FrequencyBandPerturbation:
         
         for file_attempt in range(max_file_retries):
             try: 
-
-                result = self._compute_importance(
+                result_list = self._compute_importance(
                     audio_path=audio_path,
                     file_attempt=file_attempt,
                     max_file_retries=max_file_retries,
                     retry_on_error=retry_on_error
                 )
 
-                if result.batch_importances is None:
+                if not result_list:
                     if self.checkpoint:
                         self.checkpoint.mark_as_processed(audio_path, success=False, error_msg="No importance values computed") 
                     return None
@@ -685,48 +717,52 @@ class FrequencyBandPerturbation:
                 track_output_dir = model_output_dir / file_name
                 track_output_dir.mkdir(parents=True, exist_ok=True)
                 
-                if result.importance_map is not None:
-                    if result.y is not None and result.S is not None:
-                        y = result.y
-                        S = result.S
-                    else:
-                        y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
-                        S, _ = self._compute_spectrogram(y)
-                        # S = librosa.stft(
-                        #     y, n_fft=self.n_fft, hop_length=self.hop_length, 
-                        #     window="hann", center=True
-                        # )
+                comp_importance_maps: dict[str, list[np.ndarray]] = defaultdict(list)
+                comp_baselines: dict[str, list[float]] = defaultdict(list)
+                comp_bands: dict[str, list[dict]] = defaultdict(list)
 
-                    freqs_dir = track_output_dir / "freq_batches"
-                    freqs_dir.mkdir(parents=True, exist_ok=True)
+                for comp_result in result_list:
+                    y_comp = comp_result.y
+                    S_comp = comp_result.S
+                    batch_imp = comp_result.batch_importances or []
+                    component = batch_imp[0].get("component", "mixture") if batch_imp else "mixture"
+
+                    comp_baselines[component].append(comp_result.baseline_pred)
+                    comp_importance_maps[component].append(comp_result.importance_map)
+                    comp_bands[component].extend(batch_imp)
+
+                    comp_output_dir = track_output_dir / component
+                    comp_output_dir.mkdir(parents=True, exist_ok=True)
 
                     self._save_frequency_band_importances(
-                        y=y,
-                        S=S,
-                        batch_importances=result.batch_importances,
+                        y=y_comp,
+                        S=S_comp,
+                        batch_importances=batch_imp,
                         file_name=file_name,
-                        save_dir=freqs_dir
+                        save_dir=comp_output_dir
                     )
-
-                    visualize_file_bands(
-                        bands=result.batch_importances,
-                        file_name = file_name,
-                        folder = folder_name,
-                        output_dir = track_output_dir
-                    )
-
+                    
                     visualize_fbp_saliency(
-                        importance_map=result.importance_map,
-                        S=result.S,
-                        output_path=str(track_output_dir / f"fbp_saliency_{file_name}.png"),
-                        title=f"{file_name} | FBP | Pred: {result.baseline_pred:.3f}",
+                        importance_map=comp_result.importance_map,
+                        S=S_comp,
+                        output_path=str(comp_output_dir / f"fbp_saliency_{file_name}.png"),
+                        title=f"{file_name} | FBP | Pred: {comp_result.baseline_pred:.3f}",
                         sr=self.sr,
                         hop_length=self.hop_length,
                         highlight_percent=20.0,
                         abs_threshold=None,
                     )
-                else:
-                    pass
+                    
+
+                all_batch_importances = [
+                    b for bands in comp_bands.values() for b in bands
+                ]    
+                visualize_file_bands(
+                    bands=all_batch_importances,
+                    file_name=file_name,
+                    folder=folder_name,
+                    output_dir=track_output_dir
+                )
 
                 if self.checkpoint:
                     self.checkpoint.mark_as_processed(audio_path, success=True)
@@ -734,26 +770,47 @@ class FrequencyBandPerturbation:
                 if self.profiler:
                     self.profiler.print_sample_summary()
 
+                components_summary = {}
+                for comp, maps in comp_importance_maps.items():
+                    imp_sum = np.sum(maps, axis=0)
+                    components_summary[comp] = {
+                        "baseline_pred_mean": float(np.mean(comp_baselines[comp])),
+                        "mean_importance": float(imp_sum.mean()),
+                        "max_importance": float(imp_sum.max()),
+                        "min_importance": float(imp_sum.min()),
+                        "std_importance": float(imp_sum.std()),
+                    }
+
+                if comp_importance_maps:
+                    global_map = np.sum(
+                        [np.sum(maps, axis=0) for maps in comp_importance_maps.values()],
+                        axis=0,
+                    )
+                else:
+                    global_map = result_list[0].importance_map
+
                 return {
-                    'file_path': str(audio_path),
-                    'file_name': file_name,
-                    'folder': folder_name,
-                    'baseline_pred': float(result.baseline_pred),
-                    'mean_importance': float(result.importance_map.mean()),
-                    'max_importance': float(result.importance_map.max()),
-                    'min_importance': float(result.importance_map.min()),
-                    'std_importance': float(result.importance_map.std()),
-                    'bands': result.batch_importances
+                    "file_path": str(audio_path),
+                    "file_name": file_name,
+                    "folder": folder_name,
+                    "components": components_summary,
+                    "global_mean_importance": float(global_map.mean()),
+                    "global_max_importance": float(global_map.max()),
+                    "global_min_importance": float(global_map.min()),
+                    "global_std_importance": float(global_map.std()),
+                    # "bands": all_batch_importances,
                 }
             
             except Exception as e:
+                import traceback
+                print("\n--- FULL TRACEBACK ---")
+                traceback.print_exc()
+                print("--- END TRACEBACK ---\n")
+
                 error_msg = f"{type(e).__name__}: {str(e)}"
                 print(f"[Error] Failed to process {audio_path}: {error_msg}")
-                
                 if file_attempt < max_file_retries - 1 and retry_on_error:
                     print(f"[Info] Retrying entire file (attempt {file_attempt + 2}/{max_file_retries})")
-                    time.sleep(2.0 * (file_attempt + 1))
-
                     try:
                         import tensorflow as tf
                         import gc
@@ -892,10 +949,6 @@ class FrequencyBandPerturbation:
             raise
 
     def expand_band_level_results(self, results_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Z `results_df` (1 wiersz = 1 plik) buduje DataFrame,
-        gdzie 1 wiersz = 1 pasmo (band) dla danego pliku/modelu/komponentu.
-        """
         rows = []
         for _, row in results_df.iterrows():
             bands = row.get('bands', None)
@@ -1066,6 +1119,13 @@ def visualize_fbp_saliency(
 
     # 1) spektrogram w dB
     spectrogram_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+    n_freq = S.shape[0]
+    n_fft = 2 * (n_freq - 1)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    y_ticks_hz = [0, 2500, 5000, 7500, 10000, 12500, 15000, 17500, 20000]
+    y_ticks_idx = [np.argmin(np.abs(freqs - hz)) for hz in y_ticks_hz]
+    y_ticks_lbl = [f"{f}" for f in y_ticks_hz]
 
     # maska jak w visualize_spectrogram_saliency
     if abs_threshold is not None:
@@ -1111,7 +1171,9 @@ def visualize_fbp_saliency(
         vmax=fullmap_absmax,
     )
     axes[1].set_title("Full Importance (Δ Prediction)", fontsize=13, fontweight="bold")
-    axes[1].set_ylabel("Freq bin", fontsize=11)
+    axes[1].set_ylabel("Frequency (Hz)", fontsize=11)
+    axes[1].set_yticks(y_ticks_idx)
+    axes[1].set_yticklabels(y_ticks_lbl)
     plt.colorbar(im2, ax=axes[1], label="Importance (Δ prediction)", orientation="vertical")
 
     # 3. Tylko wyróżnione regiony
@@ -1125,7 +1187,9 @@ def visualize_fbp_saliency(
         vmax=fullmap_absmax,
     )
     axes[2].set_title(f"Highlighted Importance ({maskinfo})", fontsize=13, fontweight="bold")
-    axes[2].set_ylabel("Freq bin", fontsize=11)
+    axes[2].set_ylabel("Frequency (Hz)", fontsize=11)
+    axes[2].set_yticks(y_ticks_idx)
+    axes[2].set_yticklabels(y_ticks_lbl)
     plt.colorbar(im3, ax=axes[2], label="Importance", orientation="vertical")
 
     # 4. Overlay: Δ na spektrogramie
@@ -1156,7 +1220,9 @@ def visualize_fbp_saliency(
         fontsize=13,
         fontweight="bold",
     )
-    axes[3].set_ylabel("Freq bin", fontsize=11)
+    axes[3].set_ylabel("Frequency (Hz)", fontsize=11)
+    axes[3].set_yticks(y_ticks_idx)
+    axes[3].set_yticklabels(y_ticks_lbl)
     axes[3].set_xlabel("Time frame", fontsize=11)
 
     stats_text = (
