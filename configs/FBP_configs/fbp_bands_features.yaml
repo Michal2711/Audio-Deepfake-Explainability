@@ -1,0 +1,14 @@
+dataset:
+  # dictionary with results of occlusion explainability experiment
+  fbp_result_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_mixture"
+
+output:
+  # dictionary where to save extracted features from occlusion bands
+  result_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_mixture/fbp_features"
+  experiment_name: "fbp_bands"
+
+audio:
+  samplerate: 44100
+
+fbp_bands:
+  components: ["mixture"]  # available: mixture, vocals0, bass0, drums0, other0

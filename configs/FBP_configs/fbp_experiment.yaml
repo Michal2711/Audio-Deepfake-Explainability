@@ -98,7 +98,7 @@ explainability:
 
 output:
   result_path: "results/FBP/FakeRealMusicOriginal/"
-  experiment_name: "REFACTORED_STFT_WITH_TIME"
+  experiment_name: "FBP_default_preset_rel_stft_att_0.25_mixture"
 
 # Checkpoint
 checkpoint:
