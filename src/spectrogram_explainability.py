@@ -16,7 +16,11 @@ import soundfile as sf
 import tempfile
 import os
 
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 import seaborn as sns
 from tqdm import tqdm
 from typing import NamedTuple
