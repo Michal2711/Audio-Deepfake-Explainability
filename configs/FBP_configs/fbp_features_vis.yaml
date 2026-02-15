@@ -1,0 +1,5 @@
+data:
+  features_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_4stems/fbp_features/fbp_bands"
+
+output:
+  result_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_4stems/fbp_features/"

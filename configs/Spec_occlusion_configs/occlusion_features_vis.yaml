@@ -1,5 +1,5 @@
 data:
-  features_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus23/reverb_room/Occlusion/Full_Occlusion_2048_128_all_models/occlusion_features/occlusion_patches"
+  features_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion/Full_Occlusion_2048_128_all_models/occlusion_features/occlusion_patches"
 
 output:
-  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus23/reverb_room/Occlusion/Full_Occlusion_2048_128_all_models"
+  result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion/Full_Occlusion_2048_128_all_models/occlusion_features/"

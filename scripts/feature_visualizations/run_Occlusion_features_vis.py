@@ -417,7 +417,7 @@ def viz2_real_vs_generated_boxplots_with_influence(
 
             bp = ax_models.boxplot(
                 plot_data,
-                labels=x_labels,
+                tick_labels=x_labels,
                 patch_artist=True,
                 widths=0.6,
                 showmeans=True,
@@ -479,7 +479,7 @@ def viz2_real_vs_generated_boxplots_with_influence(
             if global_plot_data:
                 bp2 = ax_global.boxplot(
                     global_plot_data,
-                    labels=global_labels,
+                    tick_labels=global_labels,
                     patch_artist=True,
                     widths=0.6,
                     showmeans=True,
@@ -610,7 +610,7 @@ def viz2_real_vs_generated_boxplots_with_influence(
 
                 bp = ax_models.boxplot(
                     plot_data,
-                    labels=x_labels,
+                    tick_labels=x_labels,
                     patch_artist=True,
                     widths=0.6,
                     showmeans=True,
@@ -673,7 +673,7 @@ def viz2_real_vs_generated_boxplots_with_influence(
                 if global_plot_data:
                     bp2 = ax_global.boxplot(
                         global_plot_data,
-                        labels=global_labels,
+                        tick_labels=global_labels,
                         patch_artist=True,
                         widths=0.6,
                         showmeans=True,
@@ -859,7 +859,7 @@ def viz_best_vs_worst_boxplots(
 
             bp = ax_models.boxplot(
                 plot_data,
-                labels=x_labels,
+                tick_labels=x_labels,
                 patch_artist=True,
                 widths=0.6,
                 showmeans=True,
@@ -921,7 +921,7 @@ def viz_best_vs_worst_boxplots(
             if global_plot_data:
                 bp2 = ax_global.boxplot(
                     global_plot_data,
-                    labels=global_labels,
+                    tick_labels=global_labels,
                     patch_artist=True,
                     widths=0.6,
                     showmeans=True,
@@ -1049,7 +1049,7 @@ def viz_best_vs_worst_boxplots(
 
                 bp = ax_models.boxplot(
                     plot_data,
-                    labels=x_labels,
+                    tick_labels=x_labels,
                     patch_artist=True,
                     widths=0.6,
                     showmeans=True,
@@ -1112,7 +1112,7 @@ def viz_best_vs_worst_boxplots(
                 if global_plot_data:
                     bp2 = ax_global.boxplot(
                         global_plot_data,
-                        labels=global_labels,
+                        tick_labels=global_labels,
                         patch_artist=True,
                         widths=0.6,
                         showmeans=True,
@@ -1308,7 +1308,7 @@ def viz_most_influential_pos_neg_boxplots(
 
             bp = ax_models.boxplot(
                 plot_data,
-                labels=x_labels,
+                tick_labels=x_labels,
                 patch_artist=True,
                 widths=0.6,
                 showmeans=True,
@@ -1370,7 +1370,7 @@ def viz_most_influential_pos_neg_boxplots(
             if global_plot_data:
                 bp2 = ax_global.boxplot(
                     global_plot_data,
-                    labels=global_labels,
+                    tick_labels=global_labels,
                     patch_artist=True,
                     widths=0.6,
                     showmeans=True,
@@ -1498,7 +1498,7 @@ def viz_most_influential_pos_neg_boxplots(
 
                 bp = ax_models.boxplot(
                     plot_data,
-                    labels=x_labels,
+                    tick_labels=x_labels,
                     patch_artist=True,
                     widths=0.6,
                     showmeans=True,
@@ -1561,7 +1561,7 @@ def viz_most_influential_pos_neg_boxplots(
                 if global_plot_data:
                     bp2 = ax_global.boxplot(
                         global_plot_data,
-                        labels=global_labels,
+                        tick_labels=global_labels,
                         patch_artist=True,
                         widths=0.6,
                         showmeans=True,
@@ -1661,7 +1661,7 @@ def main():
     data_root = Path(data_cfg.get("features_path"))
     result_root = Path(output_cfg.get("result_path"))
 
-    features_path = data_root / "occlusion_features.json"
+    features_path = data_root / "occlusion_patches_features.json"
     output_root = result_root / "features_visualization"
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -1691,3 +1691,5 @@ def main():
         base_output_folder=output_root
     )
 
+if __name__ == "__main__":
+    main()
