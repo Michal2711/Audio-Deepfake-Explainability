@@ -4,12 +4,12 @@
 dataset:
   base_path: "Data/FakeRealMusicOriginal"  # Base path to dataset
   models_to_process:
-    - UDIO
-    - SUNO
-    - SUNO_PRO
-    - ElevenLabs
+    # - UDIO
+    # - SUNO
+    # - SUNO_PRO
+    # - ElevenLabs
     - REAL
-  max_samples_per_model: 10
+  max_samples_per_model: 5
 
 # Model configuration  
 model:
@@ -56,8 +56,8 @@ explainability:
   
   # Occlusion parameters
   occlusion:
-    patch_time_frames: 2048
-    stride_time_frames: 2048
+    patch_time_frames: 1024
+    stride_time_frames: 1024
 
     patch_freq_percent: 25.0
     stride_freq_percent: 25.0
@@ -81,7 +81,7 @@ explainability:
 # Output configuration
 output:
   result_path: "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion"
-  experiment_name: "STFT_Occlusion_2048_25pct_V2"
+  experiment_name: "STFT_Occlusion_1024_25pct_just_for_test_visualizations"
   
 # Checkpoint
 checkpoint:

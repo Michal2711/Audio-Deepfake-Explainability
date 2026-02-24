@@ -145,11 +145,6 @@ def visualize_spectrogram_saliency(
     abs_threshold: float = None,
     spec_type: str = "mel"
 ):
-    """
-    Visualize full heatmap, masked version (top ±percentile or abs thresh)
-    + overlay with alpha (soft shading of less important regions).
-    """
-
     spec_type = spec_type.lower()
     if spec_type == 'stft':
         y_axis = 'hz'
@@ -175,7 +170,8 @@ def visualize_spectrogram_saliency(
     alpha_mask = np.zeros_like(importance_map, dtype=float) + 0.25
     alpha_mask[mask] = 1.0
 
-    fig, axes = plt.subplots(4, 1, figsize=(18, 16))
+    # Common axis
+    fig, axes = plt.subplots(4, 1, figsize=(18, 16), sharex=True, sharey=True)
 
     # 1. Original spectrogram
     img1 = librosa.display.specshow(
@@ -186,30 +182,29 @@ def visualize_spectrogram_saliency(
     axes[0].set_ylabel(bin_label, fontsize=11)
     plt.colorbar(img1, ax=axes[0], format='%+2.0f dB')
 
-    # 2. Full heatmap (centered colormap)
+    # 2. Full importance map
     fullmap_absmax = np.max(np.abs(importance_map))
-    im2 = axes[1].imshow(
-        importance_map, aspect='auto', origin='lower',
-        cmap='seismic', interpolation='none',
-        vmin=-fullmap_absmax, vmax=fullmap_absmax
+    img2 = librosa.display.specshow(
+        importance_map, sr=sr, hop_length=hop_length,
+        x_axis='time', y_axis=y_axis, ax=axes[1],
+        cmap='seismic', vmin=-fullmap_absmax, vmax=fullmap_absmax
     )
     axes[1].set_title('Full Importance (Δ Prediction)', fontsize=13, fontweight='bold')
     axes[1].set_ylabel(bin_label, fontsize=11)
-    plt.colorbar(im2, ax=axes[1], label='Importance (Δ prediction)', orientation='vertical')
+    plt.colorbar(img2, ax=axes[1], label='Importance (Δ prediction)', orientation='vertical')
 
-    # 3. Masked heatmap
-    im3 = axes[2].imshow(
-        filtered_map, aspect='auto', origin='lower',
-        cmap='seismic', interpolation='none',
-        vmin=-fullmap_absmax, vmax=fullmap_absmax
+    # 3. Masked importance map
+    img3 = librosa.display.specshow(
+        filtered_map, sr=sr, hop_length=hop_length,
+        x_axis='time', y_axis=y_axis, ax=axes[2],
+        cmap='seismic', vmin=-fullmap_absmax, vmax=fullmap_absmax
     )
     axes[2].set_title(f'Highlighted Importance ({maskinfo})', fontsize=13, fontweight='bold')
     axes[2].set_ylabel(bin_label, fontsize=11)
-    plt.colorbar(im3, ax=axes[2], label='Importance', orientation='vertical')
+    plt.colorbar(img3, ax=axes[2], label='Importance', orientation='vertical')
 
-    # 4. Overlay: alpha soft shading
-    # Rescale importance_map to [0, 1] for alpha (optionally: only for selected core)
-    scaled_alpha = 0.20 + 0.55 * (np.abs(importance_map) / np.max(np.abs(importance_map)))  # 0.2 background, up to 0.75
+    # 4. Overlay: background spectrogram + importance with alpha
+    scaled_alpha = 0.20 + 0.55 * (np.abs(importance_map) / (np.max(np.abs(importance_map)) + 1e-8))
 
     if abs_threshold is not None or highlight_percent is not None:
         is_core = mask
@@ -218,24 +213,35 @@ def visualize_spectrogram_saliency(
     else:
         alpha_mask = scaled_alpha
 
-    axes[3].imshow(
-        spectrogram_db, aspect='auto', origin='lower', cmap='gray', alpha=0.92
+    librosa.display.specshow(
+        spectrogram_db, sr=sr, hop_length=hop_length,
+        x_axis='time', y_axis=y_axis, ax=axes[3],
+        cmap='gray', alpha=0.92
     )
-    axes[3].imshow(
-        importance_map, aspect='auto', origin='lower',
+    librosa.display.specshow(
+        importance_map, sr=sr, hop_length=hop_length,
+        x_axis='time', y_axis=y_axis, ax=axes[3],
         cmap='seismic', alpha=alpha_mask,
-        vmin=-fullmap_absmax, vmax=fullmap_absmax, interpolation='none'
+        vmin=-fullmap_absmax, vmax=fullmap_absmax
     )
-    axes[3].set_title(f'Spectrogram + Saliency\nHighlighted: {maskinfo} (alpha=1 core, 0.25 background)', fontsize=13, fontweight='bold')
+
+    axes[3].set_title(
+        f'Spectrogram + Saliency\nHighlighted: {maskinfo} (alpha=1 core, 0.25 background)',
+        fontsize=13, fontweight='bold'
+    )
     axes[3].set_ylabel(bin_label, fontsize=11)
-    axes[3].set_xlabel('Time Frame', fontsize=11)
+    axes[3].set_xlabel('Time (s)', fontsize=11)
 
     # Statistics
-    stats_text = f"Mean: {importance_map.mean():.4f} | Max: {importance_map.max():.4f} | Min: {importance_map.min():.4f}\n"
-    stats_text += f"{maskinfo} | Highlighted: {np.sum(mask)} ({100*np.mean(mask):.1f}%)"
-    axes[3].text(0.02, 0.94, stats_text, transform=axes[3].transAxes,
-                 fontsize=9, verticalalignment='top',
-                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7)
+    stats_text = (
+        f"Mean: {importance_map.mean():.4f} | Max: {importance_map.max():.4f} | "
+        f"Min: {importance_map.min():.4f}\n"
+        f"{maskinfo} | Highlighted: {np.sum(mask)} ({100*np.mean(mask):.1f}%)"
+    )
+    axes[3].text(
+        0.02, 0.94, stats_text, transform=axes[3].transAxes,
+        fontsize=9, verticalalignment='top',
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.7)
     )
 
     plt.suptitle(title, fontsize=16, fontweight='bold')
@@ -243,6 +249,7 @@ def visualize_spectrogram_saliency(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"✅ Saved: {output_path}")
+
 
 def append_update_spectrogram_results(
     new_results: dict,
