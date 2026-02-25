@@ -153,7 +153,7 @@ def main():
         "--bands-root",
         type=str,
         default=None,
-        help="Katalog z plikami *_bands_metadata.json (domyślnie output_dir/bands)"
+        help="Directory with *_bands_metadata.json (default output_dir/bands)"
     )
 
     args = ap.parse_args()
