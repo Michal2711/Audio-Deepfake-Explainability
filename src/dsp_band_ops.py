@@ -967,6 +967,7 @@ class FrequencyBandPerturbation:
                     'band': f'{int(low)}-{int(high)}Hz',
                     'delta': float(b['importance']),
                 })
+
         if not rows:
             return pd.DataFrame()
         return pd.DataFrame(rows)
@@ -975,129 +976,74 @@ class FrequencyBandPerturbation:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        # 1) WIZUALIZACJE PER PLIK (agregaty)
-        if {'folder', 'mean_importance'}.issubset(results_df.columns):
-            plt.figure(figsize=(10, 6))
-            sns.boxplot(
-                data=results_df,
-                x='folder',
-                y='mean_importance'
-            )
-            plt.title("Rozkład średniej ważności pasm per model (folder)")
-            plt.xlabel("Model (folder)")
-            plt.ylabel("Mean importance (Δ)")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig(out / "boxplot_mean_importance_by_folder.png", dpi=300)
-            plt.close()
-
-            plt.figure(figsize=(10, 6))
-            sns.violinplot(
-                data=results_df,
-                x='folder',
-                y='baseline_pred',
-                inner='quartile'
-            )
-            plt.title("Rozkład predykcji bazowej per model (folder)")
-            plt.xlabel("Model (folder)")
-            plt.ylabel("Baseline prediction")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig(out / "violin_baseline_pred_by_folder.png", dpi=300)
-            plt.close()
-
-        # 2) WIZUALIZACJE PER PASMO (z batch_importances)
         band_df = self.expand_band_level_results(results_df)
         if band_df.empty:
-            print("⚠️ Brak danych pasmowych (bands) do wizualizacji.")
+            print("⚠️ No bands data")
             return
 
-        band_order = sorted(
-            band_df["band"].unique(),
-            key=lambda x: int(str(x).split("-")[0])
-        )
+        band_order = sorted(band_df["band"].unique(), key=lambda x: int(str(x).split("-")[0]))
 
-        # 2a) Boxplot: Δ per band, z podziałem na komponent
-        plt.figure(figsize=(14, 7))
-        sns.boxplot(
-            data=band_df,
-            x="band",
-            y="delta",
-            hue="component"
-        )
-        plt.title("Rozkład Δ (importance) dla pasm i komponentów")
-        plt.xlabel("Band (Hz)")
-        plt.ylabel("Change in probability (Δ)")
-        plt.xticks(rotation=45)
-        plt.legend(title="Component")
+        # 1. HEATMAP MODEL × BAND
+        pivot_model_band = band_df.pivot_table(index="folder", columns="band", values="delta", aggfunc="mean").reindex(columns=band_order)
+        plt.figure(figsize=(14, 8))
+        sns.heatmap(pivot_model_band, annot=True, fmt=".3f", cmap="coolwarm", center=0, linewidths=0.5, 
+                    cbar_kws={"label": "Mean Δ"})
+        plt.title("Average prediction change (Δ) per model and band", fontsize=14, fontweight="bold")
+        plt.xlabel("Band (Hz)", fontsize=12)
+        plt.ylabel("Model", fontsize=12)
         plt.tight_layout()
-        plt.savefig(out / "boxplot_delta_by_band_component.png", dpi=300)
+        plt.savefig(out / "heatmap_model_x_band.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-        # 2b) Heatmap: średnia Δ per model (folder) i band
-        pivot_model_band = band_df.pivot_table(
-            index="folder",
-            columns="band",
-            values="delta",
-            aggfunc="mean"
-        ).reindex(columns=band_order)
-
+        # 2. HEATMAP COMPONENT × BAND
+        pivot_comp_band = band_df.pivot_table(index="component", columns="band", values="delta", aggfunc="mean").reindex(columns=band_order)
         plt.figure(figsize=(12, 8))
-        sns.heatmap(
-            pivot_model_band,
-            annot=True,
-            fmt=".3f",
-            cmap="coolwarm",
-            center=0,
-            linewidths=0.5,
-            cbar_kws={"label": "Mean Δ"}
-        )
-        plt.title("Średnia Δ per model (folder) i pasmo")
-        plt.xlabel("Band (Hz)")
-        plt.ylabel("Model (folder)")
-        plt.tight_layout()
-        plt.savefig(out / "heatmap_delta_by_folder_band.png", dpi=300)
-        plt.close()
-
-        # 2c) Heatmap: średnia Δ per komponent i band
-        pivot_comp_band = band_df.pivot_table(
-            index="component",
-            columns="band",
-            values="delta",
-            aggfunc="mean"
-        ).reindex(columns=band_order)
-
-        plt.figure(figsize=(12, 8))
-        sns.heatmap(
-            pivot_comp_band,
-            annot=True,
-            fmt=".3f",
-            cmap="coolwarm",
-            center=0,
-            linewidths=0.5,
-            cbar_kws={"label": "Mean Δ"}
-        )
-        plt.title("Średnia Δ per komponent i pasmo")
+        sns.heatmap(pivot_comp_band, annot=True, fmt=".3f", cmap="coolwarm", center=0, linewidths=0.5,
+                    cbar_kws={"label": "Mean Δ"})
+        plt.title("Average Δ per component and band", fontsize=14, fontweight="bold")
         plt.xlabel("Band (Hz)")
         plt.ylabel("Component")
         plt.tight_layout()
-        plt.savefig(out / "heatmap_delta_by_component_band.png", dpi=300)
+        plt.savefig(out / "heatmap_component_x_band.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-        # 2d) Wykres słupkowy: mean Δ per band z podziałem na model
-        grouped = band_df.groupby(["band", "folder"])["delta"].mean().reset_index()
-        grouped = grouped.pivot(index="band", columns="folder", values="delta").reindex(band_order)
-
-        grouped.plot(kind="bar", figsize=(14, 8), width=0.8)
-        plt.title("Średnia Δ per pasmo z podziałem na model (folder)")
-        plt.xlabel("Band (Hz)")
-        plt.ylabel("Mean change in probability (Δ)")
-        plt.xticks(rotation=45)
-        plt.legend(title="Model (folder)", bbox_to_anchor=(1.05, 1), loc="upper left")
-        plt.grid(axis="y", alpha=0.3)
+        # 3. TOP-K PASM
+        band_df["abs_delta"] = band_df["delta"].abs()
+        plt.figure(figsize=(14, 8))
+        sns.barplot(data=band_df, x="folder", y="abs_delta", hue="band")
+        plt.title("Average |Δ| per model and band")
+        plt.xlabel("Model")
+        plt.ylabel("|Prediction change|")
+        plt.legend(title="Band (Hz)", bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.tight_layout()
-        plt.savefig(out / "bar_mean_delta_by_band_and_folder.png", dpi=300)
+        plt.savefig(out / "all_bands_horizontal.png", dpi=300)
+
+        # 4. BOXPLOT Δ per BAND + COMPONENT
+        plt.figure(figsize=(16, 8))
+        sns.boxplot(data=band_df, x="band", y="delta", hue="component")
+        plt.title("Distribution of Δ per band and component", fontsize=14, fontweight="bold")
+        plt.xticks(rotation=45)
+        plt.legend(title="Component", bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.tight_layout()
+        plt.savefig(out / "boxplot_delta_per_band_component.png", dpi=300, bbox_inches="tight")
         plt.close()
+
+        # 5. GLOBAL per MODEL
+        if "global_mean_importance" in results_df.columns:
+            global_mean = results_df.groupby("folder")["global_mean_importance"].mean().sort_values()
+            
+            plt.figure(figsize=(10, 6))
+            global_mean.plot(kind="bar", color="steelblue", alpha=0.8)
+            plt.title("Average global importance per model")
+            plt.ylabel("Global mean importance")
+            plt.xticks(rotation=45)
+            plt.grid(axis="y", alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(out / "global_importance_per_model.png", dpi=300, bbox_inches="tight")
+            plt.close()
+
+        print(f"✅ {len(list(out.glob('*.png')))} plots save in {out}")
+
 
 def visualize_fbp_saliency(
     importance_map: np.ndarray,

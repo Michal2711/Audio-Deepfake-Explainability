@@ -1,6 +1,7 @@
 # scripts/run_FBP_experiment.py
 from __future__ import annotations
 
+import json
 import os
 import sys
 import warnings
@@ -40,6 +41,51 @@ from sonics_api import LocalSonnics, RemoteSonnics
 def load_yaml(path: Path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+def load_results_from_json(json_path: Path) -> pd.DataFrame:
+    """Minimalny parser JSON → DataFrame (tylko potrzebne kolumny)"""
+    with open(json_path, "r", encoding="utf-8") as f:
+        results = json.load(f)
+    
+    rows = []
+    for folder, files in results.items():
+        for filename, data in files.items():
+            row = {
+                "file_path": data.get("file_path", ""),
+                "file_name": filename,
+                "folder": folder,
+                "global_mean_importance": data.get("global_mean_importance", 0.0),
+                "global_max_importance": data.get("global_max_importance", 0.0),
+                "global_min_importance": data.get("global_min_importance", 0.0),
+                "global_std_importance": data.get("global_std_importance", 0.0),
+            }
+            rows.append(row)
+    
+    df = pd.DataFrame(rows)
+    return df
+
+def load_all_bands(folder: str, filename: str, bands_root: Path) -> list:
+    all_bands = []
+    track_dir = bands_root / folder / filename
+    
+    if not track_dir.exists():
+        return []
+    
+    for comp_dir in track_dir.iterdir():
+        if comp_dir.is_dir():
+            meta_path = comp_dir / f"{filename}_bands_metadata.json"
+            if meta_path.exists():
+                try:
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        meta = json.load(f)
+                    bands = meta.get('bands', [])
+                    for band in bands:
+                        band['component'] = comp_dir.name
+                    all_bands.extend(bands)
+                except:
+                    pass
+    
+    return all_bands
 
 def build_predictor(model_cfg: dict):
     """Builds a predictor with optional retry configuration"""
@@ -97,6 +143,19 @@ def main():
     ap.add_argument("--config", default=str(ROOT / "configs" / "fbp_experiment.yaml"))
     ap.add_argument("--no-checkpoint", action="store_true", help="Disable checkpointing")
     ap.add_argument("--resume", action="store_true", help="Resume experiment from checkpoint")
+    ap.add_argument(
+        "--visualize-only",
+        type=str,
+        default=None,
+        help="Run only the visualization step using existing results from the specified output directory"
+    )
+    ap.add_argument(
+        "--bands-root",
+        type=str,
+        default=None,
+        help="Katalog z plikami *_bands_metadata.json (domyślnie output_dir/bands)"
+    )
+
     args = ap.parse_args()
 
     config = load_yaml(Path(args.config))
@@ -117,6 +176,33 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     config_path = save_experiment_config(config, output_dir, experiment_name)
+
+    if args.visualize_only:
+        path = Path(args.visualize_only)
+        if not path.exists():
+            print(f"ERROR: {path} does not exist!")
+            sys.exit(1)
+        
+        if path.suffix == '.json':
+            df = load_results_from_json(path)
+            df = df.rename(columns={'filename': 'file_name'})  # 🎯 POPRAWKA
+        else:
+            df = pd.read_csv(path)
+        
+        bands_root = Path(args.bands_root) if args.bands_root else output_dir / 'bands'
+        if bands_root.exists():
+            print(f"Loading bands from {bands_root}")
+            df['bands'] = df.apply(lambda row: load_all_bands(row['folder'], row['file_name'], bands_root), axis=1)
+
+        predictor = LocalSonnics.from_pretrained("awsaf49/sonics-spectttra-alpha-120s")
+        fbp = FrequencyBandPerturbation(predictor=predictor)
+        
+        viz_dir = output_dir / 'aggregate_visualizations'
+        viz_dir.mkdir(exist_ok=True)
+        fbp.visualize_results(df, output_dir=viz_dir)
+        
+        print("✅ Visualizations in:", viz_dir)
+        return
 
     checkpoint_dir = None
     if checkpoint_cfg.get('enabled', True) and not args.no_checkpoint:
