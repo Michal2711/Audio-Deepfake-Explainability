@@ -1,6 +1,6 @@
 # Paths
 dataset:
-  base_path: "Data/FakeRealMusicOriginal"
+  base_path: "Data/FakeRealMusicOriginal/"
   models_to_process:
     - UDIO
     - SUNO
@@ -88,7 +88,7 @@ spectrogram:
 
 explainability:
   # Source separation (Spleeter)
-  use_separation: false
+  use_separation: true
   separation_model: "spleeter:4stems" # Options: "spleeter:2stems", "spleeter:4stems", "spleeter:5stems"
   separation_targets: ['vocals0', 'drums0', 'bass0', 'other0'] # Depends on the model used
 
@@ -98,7 +98,7 @@ explainability:
 
 output:
   result_path: "results/FBP/FakeRealMusicOriginal/"
-  experiment_name: "FBP_default_preset_rel_stft_att_0.25_mixture"
+  experiment_name: "FBP_default_preset_rel_stft_att_0.25_4stems"
 
 # Checkpoint
 checkpoint:
