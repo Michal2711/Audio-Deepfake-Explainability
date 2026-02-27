@@ -145,15 +145,24 @@ def main():
     ap.add_argument("--resume", action="store_true", help="Resume experiment from checkpoint")
     ap.add_argument(
         "--visualize-only",
-        type=str,
+        nargs="?",
+        const=True,
         default=None,
-        help="Run only the visualization step using existing results from the specified output directory"
+        help="Run ONLY visualization. Optional path (default: output_dir/fbp_results.json)"
     )
     ap.add_argument(
         "--bands-root",
         type=str,
         default=None,
         help="Directory with *_bands_metadata.json (default output_dir/bands)"
+    )
+    ap.add_argument(
+        "--save-fbp-audio",
+        nargs="?",
+        const=True,
+        # action="store_true",
+        default=None,
+        help="Save WAV withou frequency band perturbations (default: False). If set, only perturbed audio will be saved in output_dir/track_name/perturbed.wav"
     )
 
     args = ap.parse_args()
@@ -177,15 +186,21 @@ def main():
 
     config_path = save_experiment_config(config, output_dir, experiment_name)
 
-    if args.visualize_only:
-        path = Path(args.visualize_only)
+    visualize_mode = args.visualize_only
+
+    if visualize_mode:
+        if visualize_mode is True:
+            path = output_dir / "fbp_results.json"
+        else:
+            path = Path(visualize_mode)
+        
         if not path.exists():
-            print(f"ERROR: {path} does not exist!")
+            print(f"❌ {path} does not exist!")
             sys.exit(1)
         
+        print(f"📊 Loading results: {path}")
         if path.suffix == '.json':
             df = load_results_from_json(path)
-            df = df.rename(columns={'filename': 'file_name'})  # 🎯 POPRAWKA
         else:
             df = pd.read_csv(path)
         
@@ -236,12 +251,13 @@ def main():
         separation_targets=tuple(explain_cfg.get("separation_targets", ("vocals0", "accompaniment0"))),
         normalize_loudness=bool(explain_cfg.get("normalize_loudness", True)),
         lufs=float(explain_cfg.get("lufs", -14.0)), 
-        checkpoint_dir=checkpoint_dir
+        checkpoint_dir=checkpoint_dir,
+        save_perturbed_audio_only=args.save_fbp_audio,
     )
 
-    previous_results = None
-    if args.resume and checkpoint_dir and not args.force_reprocess:
-        previous_results = fbp.load_previous_results(output_root, experiment_name)
+    # previous_results = None
+    # if args.resume and checkpoint_dir and not args.force_reprocess:
+        # previous_results = fbp.load_previous_results(output_root, experiment_name)
 
     try:
         df = fbp.run_experiment(

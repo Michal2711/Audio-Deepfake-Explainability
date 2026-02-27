@@ -292,14 +292,6 @@ def tf_retry_decorator(max_retries: int = 20):
         return wrapper
     return decorator
 
-# class Predictor:
-#     """
-#     Minimal interface required by FrequencyBandPerturbation.
-#     Implementations: LocalSonnics / RemoteSonnics in src/model_api.py.
-#     """
-#     def predict(self, audio_wave: np.ndarray, sr: int) -> float:
-#         raise NotImplementedError
-
 class FBDResult(NamedTuple):
     importance_map: Optional[np.ndarray]
     spectrogram_db: np.ndarray
@@ -334,7 +326,8 @@ class FrequencyBandPerturbation:
                  separation_targets: Tuple[str, ...] = ("vocals0", "accompaniment0"),
                  normalize_loudness: bool = True,
                  lufs: Optional[float] = None,
-                 checkpoint_dir: Optional[str | Path] = None
+                 checkpoint_dir: Optional[str | Path] = None,
+                 save_perturbed_audio_only: bool = False,
     ):
         self.predictor = predictor
         self.preset = preset
@@ -378,6 +371,8 @@ class FrequencyBandPerturbation:
 
         if checkpoint_dir:
             self.checkpoint = ExperimentCheckpoint(checkpoint_dir)
+
+        self.save_perturbed_audio_only = save_perturbed_audio_only
 
     @timed("Computing spectrogram")
     def _compute_spectrogram(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:  
@@ -489,8 +484,8 @@ class FrequencyBandPerturbation:
             high = p["high"]
             importance = p["importance"]
             component = p.get("component", "mixture")
-            component_dir = save_dir / "freq_batches"
-            component_dir.mkdir(parents=True, exist_ok=True)
+            # component_dir = save_dir / "freq_batches"
+            # component_dir.mkdir(parents=True, exist_ok=True)
 
             if self.use_original_audio:
                 y_band = y.copy()
@@ -505,16 +500,16 @@ class FrequencyBandPerturbation:
                 
             importance_type = "POSITIVE" if importance > 0 else "NEGATIVE" if importance < 0 else "NEUTRAL"
 
-            if save_audio:
-                # Normalization to prevent clipping
-                if np.max(np.abs(y_band)) > 0:
-                    y_band = y_band / np.max(np.abs(y_band)) * 0.99
+            # if save_audio:
+            #     # Normalization to prevent clipping
+            #     if np.max(np.abs(y_band)) > 0:
+            #         y_band = y_band / np.max(np.abs(y_band)) * 0.99
 
-                out_path = component_dir / (
-                    f"{file_name}__{component}__{int(low)}-{int(high)}Hz_{importance_type}_"
-                    f"{importance:+.3f}.wav"
-                )
-                sf.write(str(out_path), y_band, self.sr)
+            #     out_path = component_dir / (
+            #         f"{file_name}__{component}__{int(low)}-{int(high)}Hz_{importance_type}_"
+            #         f"{importance:+.3f}.wav"
+            #     )
+            #     sf.write(str(out_path), y_band, self.sr)
             
             metadata["bands"].append({
                 "component": component,
@@ -538,6 +533,9 @@ class FrequencyBandPerturbation:
         file_attempt: int = 0,
         max_file_retries: int = 3,
         retry_on_error: bool = True,
+        save_audio: bool = False,
+        audio_root: Optional[Path] = None,
+        file_name: Optional[str] = None
     ) -> Optional[FBDResult]:
         
         try:
@@ -617,6 +615,23 @@ class FrequencyBandPerturbation:
             band_mask = (freqs >= low) & (freqs <= high)
             importance_map[band_mask, :] += delta
 
+            if save_audio and audio_root is not None:
+                comp_dir = audio_root / component_name / "freq_batches"
+                comp_dir.mkdir(parents=True, exist_ok=True)
+
+                if np.max(np.abs(y_p)) > 0:
+                    y_out = y_p / np.max(np.abs(y_p)) * 0.99
+                else:
+                    y_out = y_p
+
+                importance_type = "POSITIVE" if delta > 0 else "NEGATIVE" if delta < 0 else "NEUTRAL"
+
+                out_name = f"{file_name}__{component_name}__{int(low)}-{int(high)}Hz_{importance_type}_{delta:+.3f}.wav"
+                out_path = comp_dir / out_name
+                sf.write(str(out_path), y_out, self.sr)
+
+                self.visualize_orig_vs_masked_spectrogram(S, S_p, file_name, comp_dir, component_name, low, high, delta)
+
         return FBDResult(
             importance_map=importance_map,
             spectrogram_db=S_db,
@@ -632,7 +647,9 @@ class FrequencyBandPerturbation:
             audio_path: str,
             file_attempt: int = 0,
             max_file_retries: int = 3,
-            retry_on_error: bool = True
+            retry_on_error: bool = True,
+            track_output_dir: Optional[Path] = None,
+            file_name: Optional[str] = None
         ) -> list[FBDResult]:
 
         y, _ = librosa.load(audio_path, sr=self.sr, duration=self.duration, mono=True)
@@ -652,7 +669,10 @@ class FrequencyBandPerturbation:
                 component_name=name,
                 audio_path=audio_path,
                 max_file_retries=max_file_retries,
-                retry_on_error=retry_on_error
+                retry_on_error=retry_on_error,
+                save_audio=self.save_perturbed_audio_only,
+                audio_root=track_output_dir if self.save_perturbed_audio_only else None,
+                file_name=file_name
             )
 
             if comp_result is not None:
@@ -696,17 +716,6 @@ class FrequencyBandPerturbation:
         
         for file_attempt in range(max_file_retries):
             try: 
-                result_list = self._compute_importance(
-                    audio_path=audio_path,
-                    file_attempt=file_attempt,
-                    max_file_retries=max_file_retries,
-                    retry_on_error=retry_on_error
-                )
-
-                if not result_list:
-                    if self.checkpoint:
-                        self.checkpoint.mark_as_processed(audio_path, success=False, error_msg="No importance values computed") 
-                    return None
 
                 if folder_name:
                     model_output_dir = output_dir / folder_name
@@ -716,6 +725,20 @@ class FrequencyBandPerturbation:
 
                 track_output_dir = model_output_dir / file_name
                 track_output_dir.mkdir(parents=True, exist_ok=True)
+
+                result_list = self._compute_importance(
+                    audio_path=audio_path,
+                    file_attempt=file_attempt,
+                    max_file_retries=max_file_retries,
+                    retry_on_error=retry_on_error,
+                    track_output_dir=track_output_dir,
+                    file_name=file_name
+                )
+
+                if not result_list:
+                    if self.checkpoint:
+                        self.checkpoint.mark_as_processed(audio_path, success=False, error_msg="No importance values computed") 
+                    return None
                 
                 comp_importance_maps: dict[str, list[np.ndarray]] = defaultdict(list)
                 comp_baselines: dict[str, list[float]] = defaultdict(list)
@@ -1044,6 +1067,34 @@ class FrequencyBandPerturbation:
 
         print(f"✅ {len(list(out.glob('*.png')))} plots save in {out}")
 
+    def visualize_orig_vs_masked_spectrogram(self, S_orig, S_masked, filename, compdir, component, low, high, delta):
+        """
+        Saves two spectrograms: original and masked to batches_vis.
+        """       
+        Sdb_orig = librosa.amplitude_to_db(np.abs(S_orig), ref=np.max)
+        Sdb_masked = librosa.amplitude_to_db(np.abs(S_masked), ref=np.max)
+        
+        vis_dir = compdir.parent / 'batches_vis'
+        vis_dir.mkdir(parents=True, exist_ok=True)
+        
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Original spektrogram
+        img1 = librosa.display.specshow(Sdb_orig, sr=self.sr, hop_length=self.hop_length, 
+                                    x_axis='time', y_axis='hz', ax=axes[0], cmap='viridis')
+        axes[0].set_title('Original spectrogram')
+        plt.colorbar(img1, ax=axes[0])
+        
+        # Masked spektrogram
+        img2 = librosa.display.specshow(Sdb_masked, sr=self.sr, hop_length=self.hop_length, 
+                                    x_axis='time', y_axis='hz', ax=axes[1], cmap='viridis')
+        axes[1].set_title('Masked spectrogram (band disabled)')
+        plt.colorbar(img2, ax=axes[1])
+        
+        plt.suptitle(f'{filename} (low={low}, high={high}, component={component}, delta={delta:.3f})')
+        plt.tight_layout()
+        plt.savefig(vis_dir / f'{filename}__{component}__{low}_{high}_{delta:.3f}.png', dpi=300, bbox_inches='tight')
+        plt.close()
 
 def visualize_fbp_saliency(
     importance_map: np.ndarray,
