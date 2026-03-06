@@ -54,7 +54,6 @@ def main():
     components = components_cfg.get("components", ["mixture"])
     components = set(components)
 
-    # dictionary where to save extracted features from AudioLIME components
     output_root = result_root / experiment_name
     output_root.mkdir(parents=True, exist_ok=True)
     print("=" * 70)
