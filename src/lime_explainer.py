@@ -311,7 +311,7 @@ def explain_predictions_separate(
     folder_name: str = "",
     explanations_path: Optional[str] = None,
     features_output_dir: Optional[str] = None,
-    model_name: Optional[str] = None
+    model_name: Optional[str] = None,
 ):
     """
     Function to explain predictions for a set of audio files using LIME.
@@ -497,6 +497,7 @@ def run_lime_experiment_safe(
     segmented_explanations: bool = False,
     segment_duration: float = 10.0,
     segmented_explanations_path: Optional[str] = None,
+    save_separated_audio_only: Optional[bool] = None
 ):
     """ 
     Run the LIME experiment for fake song detection.
@@ -532,20 +533,48 @@ def run_lime_experiment_safe(
             continue
         
         print(f"   Getting predictions for {len(all_audio)} files...")
+
+        if not save_separated_audio_only:
         
-        original_probs = predict_batch_from_files(
-            predictor, 
-            all_audio, 
-            verbose=True,
-            sr=44100,  # For local
-            duration=model_time  # For local
-        )
-        
-        predictions = [prob > 0.5 for prob in original_probs]
-        results[folder.name] = predictions
+            original_probs = predict_batch_from_files(
+                predictor, 
+                all_audio, 
+                verbose=True,
+                sr=44100,  # For local
+                duration=model_time  # For local
+            )
+            
+            predictions = [prob > 0.5 for prob in original_probs]
+            results[folder.name] = predictions
         
         if explain:
             if full_track_explanations:
+
+                if save_separated_audio_only:
+                    for fpath in all_audio:
+                        y, _ = librosa.load(fpath, sr=44100, mono=True, offset=0, duration=model_time)
+                        
+                        factorization = SpleeterFactorization(
+                            input=y,
+                            target_sr=44100,
+                            temporal_segmentation_params=1,
+                            composition_fn=None,
+                            model_name="spleeter:4stems"
+                        )
+
+                        components = factorization.components
+                        components_names = factorization._components_names
+
+                        for i, (name, separated_audio) in enumerate(zip(components_names, components)):
+                            orig_filename = Path(fpath).stem
+                            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', orig_filename)
+                            separated_audio_path = Path(features_output_dir_full or "") / folder.name / safe_name / "separated_components" / f"{name}.wav"
+                            separated_audio_path.parent.mkdir(parents=True, exist_ok=True)
+                            sf.write(separated_audio_path, separated_audio, 44100)
+                            print(f"   Saved separated component audio: {separated_audio_path}")
+
+                    continue
+
                 folder_explanations = explain_predictions_separate(
                     audio_files=all_audio,
                     predictor=predictor,
@@ -618,6 +647,10 @@ def run_lime_experiment_safe(
                         }
                     if segmented_explanations_path:
                         append_update_explanations(merged_explanations, Path(segmented_explanations_path))
+
+    if save_separated_audio_only:
+        print("\n✅ Experiment completed with separated audio saved. No explanations generated.")
+        return None, None
 
     df = pd.DataFrame(results)
     print("\n📊 Results DataFrame (True = Fake):")

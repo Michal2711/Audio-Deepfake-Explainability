@@ -77,6 +77,14 @@ def main():
     ap.add_argument("--config", default=str(ROOT / "configs/AudioLIME_configs" / "lime_experiment.yaml"))
     ap.add_argument("--no-checkpoint", action="store_true", help="Disable checkpointing")
     ap.add_argument("--resume", action="store_true", help="Resume from checkpoint")
+    ap.add_argument(
+        "--save-separated-audio",
+        nargs="?",
+        const=True,
+        default=None,
+        help="Save separated audio components (default: False). If set, only separated audio will be saved in output_dir/track_name/separated_components/"
+    )
+    
     args = ap.parse_args()
 
     config = load_yaml(Path(args.config))
@@ -177,7 +185,8 @@ def main():
             full_track_explanations=full_track_explanations,
             segmented_explanations=segmented_explanations,
             segment_duration=segment_duration,
-            segmented_explanations_path=str(segmented_explanations_path)
+            segmented_explanations_path=str(segmented_explanations_path),
+            save_separated_audio_only=args.save_separated_audio
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Experiment interrupted (Ctrl+C)")
@@ -193,6 +202,10 @@ def main():
     
     print("\n📊 Generating visualizations...")
 
+    if args.save_fbp_audio:
+        print("\n✅ Experiment completed with separated audio saved. No explanations generated.")
+        return
+    
     if viz_cfg.get('overall', True):
         viz_path_overall = result_path / experiment_name / "overall_visualizations"
         try:
