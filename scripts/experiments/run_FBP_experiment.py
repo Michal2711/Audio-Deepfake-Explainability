@@ -255,10 +255,6 @@ def main():
         save_perturbed_audio_only=args.save_fbp_audio,
     )
 
-    # previous_results = None
-    # if args.resume and checkpoint_dir and not args.force_reprocess:
-        # previous_results = fbp.load_previous_results(output_root, experiment_name)
-
     try:
         df = fbp.run_experiment(
             base_path=base_path,
