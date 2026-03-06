@@ -284,21 +284,69 @@ def add_freq_band_from_band_key(features_df):
     df['band_key'] = df['band_key'].astype(str)
     
     conditions = [
+        # default FBP bands
         df['band_key'].str.contains('20.0_100.0Hz', case=False, na=False),
         df['band_key'].str.contains('100.0_250.0Hz', case=False, na=False),
         df['band_key'].str.contains('250.0_2000.0Hz', case=False, na=False),
         df['band_key'].str.contains('2000.0_4000.0Hz', case=False, na=False),
         df['band_key'].str.contains('4000.0_8000.0Hz', case=False, na=False),
         df['band_key'].str.contains('8000.0_16000.0Hz', case=False, na=False),
+        # detailed voice preset bands
+        df['band_key'].str.contains('20.0_60.0Hz', case=False, na=False),
+        df['band_key'].str.contains('60.0_250.0Hz', case=False, na=False),
+        df['band_key'].str.contains('250.0_500.0Hz', case=False, na=False),
+        df['band_key'].str.contains('500.0_2000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('2000.0_4000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('4000.0_6000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('6000.0_12000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('12000.0_21000.0Hz', case=False, na=False),
+        # high resolution preset bands
+        df['band_key'].str.contains('20.0_60.0Hz', case=False, na=False),
+        df['band_key'].str.contains('60.0_100.0Hz', case=False, na=False),
+        df['band_key'].str.contains('100.0_250.0Hz', case=False, na=False),
+        df['band_key'].str.contains('250.0_500.0Hz', case=False, na=False),
+        df['band_key'].str.contains('500.0_1000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('1000.0_2000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('2000.0_4000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('4000.0_6000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('6000.0_8000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('8000.0_10000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('10000.0_12000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('12000.0_16000.0Hz', case=False, na=False),
+        df['band_key'].str.contains('16000.0_21000.0Hz', case=False, na=False),
     ]
     
     choices = [
+        # default FBP bands
         '20-100 Hz',
         '100-250 Hz',
         '250-2000 Hz',
         '2000-4000 Hz',
         '4000-8000 Hz',
-        '8000-16000 Hz'
+        '8000-16000 Hz',
+        # detailed voice preset bands
+        '20-60 Hz',
+        '60-250 Hz',
+        '250-500 Hz',
+        '500-2000 Hz',
+        '2000-4000 Hz',
+        '4000-6000 Hz',
+        '6000-12000 Hz',
+        '12000-21000 Hz',
+        # high resolution preset bands
+        '20-60 Hz',
+        '60-100 Hz',
+        '100-250 Hz',
+        '250-500 Hz',
+        '500-1000 Hz',
+        '1000-2000 Hz',
+        '2000-4000 Hz',
+        '4000-6000 Hz',
+        '6000-8000 Hz',
+        '8000-10000 Hz',
+        '10000-12000 Hz',
+        '12000-16000 Hz',
+        '16000-21000 Hz'
     ]
     
     df['freq_band'] = np.select(conditions, choices, default='other')
@@ -405,23 +453,20 @@ def viz_component_pos_neg_boxplots(
             col = columns_list[0][0]
             
             fig, axes = plt.subplots(1, 2, figsize=(20, 8))
-            ax_components, ax_global = axes
+            ax_models, ax_global = axes
             
             plot_data = []
             x_labels = []
-            for comp in components:
-                for sign in signs:
-                    mask = (
-                        (df[component_col] == comp) &
-                        (df['influence_sign'] == sign)
-                    )
+            for model in models:
+                for s in signs:
+                    mask = (df['model'] == model) & (df[sign_col] == s)
                     data = df.loc[mask, col].dropna()
                     if len(data) > 0:
                         plot_data.append(data.values)
-                        x_labels.append(f'{comp}\n{sign}')
+                        x_labels.append(f'{model}\n{s}')
                     else:
                         plot_data.append(None)
-                        x_labels.append(f'{comp}\n{sign}')
+                        x_labels.append(f'{model}\n{s}')
             
             non_empty_indices = [
                 i for i, d in enumerate(plot_data)
@@ -436,7 +481,7 @@ def viz_component_pos_neg_boxplots(
             plot_data = [plot_data[i] for i in non_empty_indices]
             x_labels = [x_labels[i] for i in non_empty_indices]
             
-            bp = ax_components.boxplot(
+            bp = ax_models.boxplot(
                 plot_data,
                 tick_labels=x_labels,
                 patch_artist=True,
@@ -469,30 +514,30 @@ def viz_component_pos_neg_boxplots(
             for i, data in enumerate(plot_data):
                 y = data
                 x = np.random.normal(i + 1, 0.05, size=len(y))
-                ax_components.scatter(
+                ax_models.scatter(
                     x, y, alpha=0.35, s=25,
                     color='black', edgecolors='gray', linewidth=0.5
                 )
             
-            ax_components.set_ylabel('Value', fontsize=13, fontweight='bold')
-            ax_components.set_title(
+            ax_models.set_ylabel('Value', fontsize=13, fontweight='bold')
+            ax_models.set_title(
                 f'{col} per component (positive vs negative influence)',
                 fontsize=13, fontweight='bold', pad=15
             )
-            ax_components.grid(axis='y', alpha=0.3, linestyle='--', linewidth=0.8)
-            ax_components.set_axisbelow(True)
-            ax_components.spines['top'].set_visible(False)
-            ax_components.spines['right'].set_visible(False)
-            ax_components.spines['left'].set_linewidth(1.8)
-            ax_components.spines['bottom'].set_linewidth(1.8)
+            ax_models.grid(axis='y', alpha=0.3, linestyle='--', linewidth=0.8)
+            ax_models.set_axisbelow(True)
+            ax_models.spines['top'].set_visible(False)
+            ax_models.spines['right'].set_visible(False)
+            ax_models.spines['left'].set_linewidth(1.8)
+            ax_models.spines['bottom'].set_linewidth(1.8)
             
-            for tick in ax_components.get_xticklabels():
+            for tick in ax_models.get_xticklabels():
                 tick.set_rotation(45)
                 tick.set_ha('right')
             
             global_plot_data = []
             global_labels = []
-            for sign in signs:
+            for s in signs:
                 data = df.loc[df['influence_sign'] == sign, col].dropna()
                 if len(data) > 0:
                     global_plot_data.append(data.values)
@@ -565,7 +610,7 @@ def viz_component_pos_neg_boxplots(
             plt.tight_layout(rect=[0.03, 0.14, 0.97, 0.93])
             
             stats_text = format_influence_statistics_box(x_labels, plot_data)
-            add_bottom_stats_panel(fig, ax_components, stats_text,
+            add_bottom_stats_panel(fig, ax_models, stats_text,
                                     width_frac=0.45, y_margin=0.04)
             
             if global_plot_data:
@@ -780,6 +825,271 @@ def viz_component_pos_neg_boxplots(
     print(f"✅ Ready for academic thesis presentation!")
     print(f"{'='*80}\n")
 
+def viz_feature_groups_by_freq_band(
+    features_df,
+    base_output_folder=Path('./'),
+    importance_col='importance',
+    band_type_col='band_type',
+    freq_band_col='freq_band'
+):
+    setup_professional_style()
+
+    df = features_df.copy()
+
+    if band_type_col not in df.columns:
+        df['influence_sign'] = np.where(df[importance_col] >= 0, 'positive', 'negative')
+    else:
+        df['influence_sign'] = df[band_type_col].astype(str).str.lower()
+
+    if freq_band_col not in df.columns:
+        raise ValueError(f"Column '{freq_band_col}' not found")
+
+    bands = sorted(df[freq_band_col].dropna().unique())
+
+    print(f"Processing {len(bands)} frequency bands...")
+
+    for band in bands:
+        band_df = df[df[freq_band_col] == band].copy()
+        if band_df.empty:
+            print(f"⚠️ Skipping empty band: {band}")
+            continue
+
+        band_base_folder = Path(base_output_folder) / 'by_freq_band_feature_sign' / band.replace(' ', '_')
+        band_base_folder.mkdir(parents=True, exist_ok=True)
+
+        models = sorted(band_df['model'].dropna().unique())
+        signs = ['negative', 'positive']
+
+        exclude_cols = {
+            'model', 'track', 'band_key', 'data_type',
+            importance_col, 'influence_sign', freq_band_col
+        }
+        band_meta_cols = {
+            'component', 'importance', 'abs_importance',
+            'low_freq', 'high_freq', 'band_type', 'model', 'track_stem'
+        }
+
+        all_cols = [
+            col for col in band_df.columns
+            if (
+                col not in exclude_cols and
+                col not in band_meta_cols and
+                band_df[col].dtype in ['float64', 'float32', 'int64', 'int32'] and
+                band_df[col].notna().sum() > 0
+            )
+        ]
+
+        feature_groups = defaultdict(list)
+        for col in all_cols:
+            parts = col.split('_')
+            if len(parts) > 1 and parts[-1] in ['min', 'mean', 'std', 'max']:
+                base_name = '_'.join(parts[:-1])
+                stat = parts[-1]
+            else:
+                base_name = col
+                stat = 'single'
+            feature_groups[base_name].append((col, stat))
+
+        print(f"  {band}: {len(feature_groups)} feature groups")
+
+        for feature_base, columns_list in sorted(feature_groups.items()):
+            feature_folder = band_base_folder / feature_base
+            feature_folder.mkdir(parents=True, exist_ok=True)
+
+            if len(columns_list) == 1 and columns_list[0][1] == 'single':
+                col = columns_list[0][0]
+                _viz_single_feature_in_band(band_df, col, feature_folder, models, signs, feature_base)
+            else:
+                stat_order = ['min', 'mean', 'std', 'max']
+                columns_sorted = sorted(
+                    columns_list,
+                    key=lambda x: next((i for i, stat in enumerate(stat_order) if stat == x[1]), 999)
+                )
+
+                for col, stat in columns_sorted:
+                    stat_label = stat.upper() if stat != 'single' else col
+                    _viz_single_feature_in_band(band_df, col, feature_folder, models, signs, feature_base, stat_label)
+
+        print(f"  ✅ {band_base_folder} done")
+
+def _viz_single_feature_in_band(band_df, col, feature_folder, models, signs, feature_base, stat_label=None):
+    feat_df = band_df[band_df[col].notna()].copy()
+    if feat_df.empty:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+    ax_models, ax_global = axes
+    sign_col = 'influence_sign'
+
+    # ===== Left panel: per model =====
+    plot_data = []
+    x_labels = []
+
+    for model in models:
+        for s in signs:
+            mask = (feat_df['model'] == model) & (feat_df[sign_col] == s)
+            data = feat_df.loc[mask, col].dropna()
+            if len(data) > 0:
+                plot_data.append(data.values)
+                x_labels.append(f'{model}\n{s}')
+            else:
+                plot_data.append(None)
+                x_labels.append(f'{model}\n{s}')
+
+    non_empty_indices = [i for i, d in enumerate(plot_data) if d is not None and len(d) > 0]
+    if not non_empty_indices:
+        print(f" ⚠️ SKIPPED: No valid data for {col}")
+        plt.close(fig)
+        return
+
+    plot_data = [plot_data[i] for i in non_empty_indices]
+    x_labels = [x_labels[i] for i in non_empty_indices]
+
+    bp = ax_models.boxplot(
+        plot_data,
+        tick_labels=x_labels,
+        patch_artist=True,
+        widths=0.6,
+        showmeans=True,
+        meanline=False,
+        notch=False,
+        vert=True,
+        whis=1.5,
+        meanprops=dict(
+            marker='D', markerfacecolor='red',
+            markersize=7, markeredgecolor='darkred',
+            markeredgewidth=1.5
+        ),
+        medianprops=dict(color='darkblue', linewidth=2),
+        whiskerprops=dict(linewidth=1.5, color='black'),
+        capprops=dict(linewidth=1.5, color='black'),
+        boxprops=dict(linewidth=1.5, color='black')
+    )
+
+    for i, patch in enumerate(bp['boxes']):
+        label = x_labels[i]
+        s = 'positive' if 'positive' in label else 'negative'
+        color = SIGN_COLORS.get(s, '#cccccc')
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+        patch.set_edgecolor('black')
+        patch.set_linewidth(2)
+
+    for i, data in enumerate(plot_data):
+        y = data
+        x = np.random.normal(i + 1, 0.05, size=len(y))
+        ax_models.scatter(
+            x, y, alpha=0.35, s=25,
+            color='black', edgecolors='gray', linewidth=0.5
+        )
+
+    title_suffix = f' – {stat_label}' if stat_label else ''
+    ax_models.set_ylabel('Value', fontsize=13, fontweight='bold')
+    ax_models.set_title(
+        f'{col.replace("_", " ")}{title_suffix} per model\n'
+        f'(most_influential, positive vs negative)',
+        fontsize=13, fontweight='bold', pad=15
+    )
+    ax_models.grid(axis='y', alpha=0.3, linestyle='--', linewidth=0.8)
+    ax_models.set_axisbelow(True)
+    ax_models.spines['top'].set_visible(False)
+    ax_models.spines['right'].set_visible(False)
+    ax_models.spines['left'].set_linewidth(1.8)
+    ax_models.spines['bottom'].set_linewidth(1.8)
+    for tick in ax_models.get_xticklabels():
+        tick.set_rotation(45)
+        tick.set_ha('right')
+
+    # ===== Right panel: global =====
+    global_plot_data = []
+    global_labels = []
+
+    for s in signs:
+        data = feat_df.loc[feat_df[sign_col] == s, col].dropna()
+        if len(data) > 0:
+            global_plot_data.append(data.values)
+            global_labels.append(s)
+
+    if global_plot_data:
+        bp2 = ax_global.boxplot(
+            global_plot_data,
+            tick_labels=global_labels,
+            patch_artist=True,
+            widths=0.6,
+            showmeans=True,
+            meanline=False,
+            notch=False,
+            vert=True,
+            whis=1.5,
+            meanprops=dict(
+                marker='D', markerfacecolor='red',
+                markersize=7, markeredgecolor='darkred',
+                markeredgewidth=1.5
+            ),
+            medianprops=dict(color='darkblue', linewidth=2),
+            whiskerprops=dict(linewidth=1.5, color='black'),
+            capprops=dict(linewidth=1.5, color='black'),
+            boxprops=dict(linewidth=1.5, color='black')
+        )
+
+        for i, patch in enumerate(bp2['boxes']):
+            s = global_labels[i]
+            color = SIGN_COLORS.get(s, '#cccccc')
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+            patch.set_edgecolor('black')
+            patch.set_linewidth(2)
+
+        for i, data in enumerate(global_plot_data):
+            y = data
+            x = np.random.normal(i + 1, 0.05, size=len(y))
+            ax_global.scatter(
+                x, y, alpha=0.35, s=25,
+                color='black', edgecolors='gray', linewidth=0.5
+            )
+
+        ax_global.set_ylabel('Value', fontsize=13, fontweight='bold')
+        ax_global.set_title(
+            f'{col.replace("_", " ")}{title_suffix}\n'
+            f'(most_influential, all models, positive vs negative)',
+            fontsize=13, fontweight='bold', pad=15
+        )
+        ax_global.grid(axis='y', alpha=0.3, linestyle='--', linewidth=0.8)
+        ax_global.set_axisbelow(True)
+        ax_global.spines['top'].set_visible(False)
+        ax_global.spines['right'].set_visible(False)
+        ax_global.spines['left'].set_linewidth(1.8)
+        ax_global.spines['bottom'].set_linewidth(1.8)
+    else:
+        ax_global.text(
+            0.5, 0.5,
+            f'No data for {stat_label} (most_influential)',
+            transform=ax_global.transAxes,
+            ha='center', va='center', fontsize=12, color='red'
+        )
+        ax_global.axis('off')
+
+    fig.suptitle(
+        f'Feature Analysis (most_influential, influence split): '
+        f'{feature_base.replace("_", " ").title()} – {stat_label or col}',
+        fontsize=16, fontweight='bold', y=0.97
+    )
+
+    plt.tight_layout(rect=[0.03, 0.14, 0.97, 0.93])
+
+    stats_text = format_influence_statistics_box(x_labels, plot_data)
+    add_bottom_stats_panel(fig, ax_models, stats_text, width_frac=0.45, y_margin=0.04)
+
+    global_stats_text = format_influence_statistics_box(global_labels, global_plot_data)
+    add_bottom_stats_panel(fig, ax_global, global_stats_text, width_frac=0.30, y_margin=0.04)
+
+    out_file = feature_folder / f'{col}_{stat_label or "single"}_most_influential_pos_neg.png'
+    plt.savefig(
+        out_file, dpi=300, bbox_inches='tight',
+        facecolor='white', edgecolor='none'
+    )
+    plt.close(fig)
+    print(f" ✓ Saved: {out_file}")
 
 def main():
     args = parse_args()
@@ -797,7 +1107,7 @@ def main():
 
     print("=" * 70)
     print(f"Output root: {output_root}")
-    print("Visualizing occlusion feature importance results")
+    print("Visualizing FBP feature importance results")
     print("=" * 70)
 
     features_df, features_to_analyze = load_and_prepare_data_full(features_path)
@@ -816,6 +1126,11 @@ def main():
     viz_component_pos_neg_boxplots(
         features_df,
         base_output_folder=output_root,
+    )
+
+    viz_feature_groups_by_freq_band(
+        features_df,
+        base_output_folder=output_root
     )
 
 if __name__ == "__main__":
