@@ -2,7 +2,7 @@
 
 # Dataset configuration
 dataset:
-  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus23/reverb_room"
+  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus23/reverb_room"  # path to dataset with separated components
   
 # Model configuration
 model:
@@ -29,10 +29,10 @@ lime:
   num_samples_lime: 500 # Number of samples for LIME (500-1000 for better quality)
   models_to_explain:
     - UDIO
-    - SUNO
-    - SUNO_PRO
-    - REAL
-    - ElevenLabs
+    # - SUNO
+    # - SUNO_PRO
+    # - REAL
+    # - ElevenLabs
   ids_to_explain:
     - 0
     - 1
@@ -48,7 +48,7 @@ lime:
 # Output configuration
 output:
   result_path: "results/AudioLIME/FakeRealMusicOriginalNormalized/minus23/reverb_room"
-  experiment_name: "FULL_TEST_500"
+  experiment_name: "AudioLIME_500_samples_full_track"
   
 # Visualization configuration
 visualization:

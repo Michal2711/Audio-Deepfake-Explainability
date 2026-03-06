@@ -1,0 +1,14 @@
+dataset:
+  # dictionary with results of occlusion explainability experiment
+  lime_result_path: "results/AudioLIME/FakeRealMusicOriginalNormalized/minus23/reverb_room/AudioLIME_500_samples_full_track"
+
+output:
+  # dictionary where to save extracted features from occlusion bands
+  result_path: "results/AudioLIME/FakeRealMusicOriginalNormalized/minus23/reverb_room/AudioLIME_500_samples_full_track/lime_features"
+  experiment_name: "lime_components"
+
+audio:
+  samplerate: 44100
+
+lime_comp_features:
+  components: ["vocals0", "bass0", "drums0", "other0"]  # available: mixture, vocals0, bass0, drums0, other0

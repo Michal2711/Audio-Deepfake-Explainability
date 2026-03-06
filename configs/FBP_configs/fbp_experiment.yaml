@@ -2,12 +2,12 @@
 dataset:
   base_path: "Data/FakeRealMusicOriginal/"
   models_to_process:
-    # - UDIO
-    # - SUNO
-    # - SUNO_PRO
-    # - ElevenLabs
+    - UDIO
+    - SUNO
+    - SUNO_PRO
+    - ElevenLabs
     - REAL
-  max_samples_per_model: 5
+  max_samples_per_model: 10
 
 model:
   local: false
@@ -26,10 +26,10 @@ model:
 
 bands:
   # Choices of bands preset and attenuation parameters
-  preset: "default"   # default | detailed_voice | high_resolution
+  preset: "detailed_voice"   # default | detailed_voice | high_resolution
 
   # Leaving some energy in the band (0.0 = mute; 1.0 = no change)
-  attenuation: 0.75
+  attenuation: 0.25
 
   # Transition definition (edge smoothing)
   transition:
@@ -98,7 +98,7 @@ explainability:
 
 output:
   result_path: "results/FBP/FakeRealMusicOriginal/"
-  experiment_name: "FBP_default_preset_rel_stft_att_0.75_TEST_SAVE_AUDIO"
+  experiment_name: "FBP_detailed_voice_preset_rel_stft_att_0.25_mixture"
 
 # Checkpoint
 checkpoint:
