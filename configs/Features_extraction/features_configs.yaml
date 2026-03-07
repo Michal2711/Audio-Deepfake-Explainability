@@ -1,7 +1,7 @@
 # features_ configs.yaml
 
 dataset:
-  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus14/noise_snr30"
+  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus23/base"
 
 audio:
   sample_rate: 44100
@@ -30,5 +30,5 @@ features:
   segment_duration: 30.0  # Length of each segment in seconds (if segmented features are extracted)
 
 output:
-  result_path: "results/Features/FakeRealMusicOriginalNormalized/minus14/noise_snr30"
-  experiment_name: "Extended_full_track_features"
+  result_path: "results/Features/FakeRealMusicOriginalNormalized/minus23/base"
+  experiment_name: "Features_all_models_samples_without_segments"

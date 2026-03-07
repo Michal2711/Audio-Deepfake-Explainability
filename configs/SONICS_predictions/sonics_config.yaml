@@ -2,7 +2,7 @@
 
 # Dataset configuration
 dataset:
-  dataset_path: "Data/FakeRealMusicOriginalNormalized/minus23/reverb_room"
+  dataset_path: "Data/FakeRealMusicOriginal"
   sample_rate: 44100
   
 # Model configuration
@@ -25,5 +25,5 @@ model:
   
 # Output configuration
 output:
-  result_path: "results/Predictions/FakeRealMusicOriginalNormalized/minus23/reverb_room/"
-  experiment_name: "FULL_TEST"
+  result_path: "results/Predictions/FakeRealMusicOriginal/"
+  experiment_name: "Sonics_predictions_SpecTTTra-α-120s"
