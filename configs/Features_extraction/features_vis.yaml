@@ -1,0 +1,6 @@
+data:
+  features_path: "results/Features/FakeRealMusicOriginal/Features_all_models_samples_without_segments/full_track/features.json"
+  predictions_path: "results/Predictions/FakeRealMusicOriginal/Sonics_predictions_SpecTTTra-α-120s/full_track/predictions.json"
+
+output:
+  result_path: "results/Features/FakeRealMusicOriginal/Features_all_models_samples_without_segments/full_track/features_visualization/"
