@@ -14,23 +14,9 @@ import soundfile as sf
 import librosa
 import re
 
-from audioLIME.factorization_spleeter import SpleeterFactorization
-
 from feature_extraction import (
     extract_all_features,
 )
-
-from feature_visualizations import (
-    plot_all_waveforms, 
-    plot_all_spectrograms,
-    plot_rms_envelope,
-    plot_rhythm_statistics,
-    plot_enhanced_visualizations,
-    plot_f0_contour,
-    plot_mel_spectrogram_with_f0,
-    plot_spectral_summary,
-)
-
 def append_update_features(new_features: dict, features_path: Path):
     """
     Merged new features with existing ones in a JSON file.
@@ -161,18 +147,8 @@ def extract_all_features_separately(
                 else:
                     waveform_mono = waveform
 
-                factorization = SpleeterFactorization(
-                    input=waveform_mono,
-                    target_sr=sample_rate,
-                    temporal_segmentation_params=1,
-                    composition_fn=None,
-                    model_name="spleeter:4stems"
-                )
-
                 orig_filename = Path(audio_files[i]).stem
                 safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', orig_filename)
-                features_audio_output_dir = Path(features_output_dir or "") / folder_name / safe_name
-                features_audio_output_dir.mkdir(parents=True, exist_ok=True)
 
                 mix_features = extract_all_features(waveform_mono, sr=sample_rate)
 
@@ -180,103 +156,7 @@ def extract_all_features_separately(
                         mix_features['intonation_pattern'].pop('f0_contour', None)
                         mix_features['intonation_pattern'].pop('times', None)
 
-                if 'rhythm_stats' in mix_features:
-                    mix_features['rhythm_stats'].pop('beats_times', None)
-
                 features_for_track['mix'] = to_native_dict(mix_features)
-
-                if features_output_dir:
-                    plot_rms_envelope(waveform_mono, sr=sample_rate,
-                    output_path=features_audio_output_dir / f"{safe_name}_rms_envelope.png",
-                    title=f"RMS Envelope ({safe_name})")
-
-                    rhythm_stats = plot_rhythm_statistics(
-                        waveform_mono, sr=sample_rate,
-                        output_dir=features_audio_output_dir, prefix=safe_name
-                    )
-
-                    plot_spectral_summary(
-                        waveform_mono,
-                        sr=sample_rate,
-                        output_dir=features_audio_output_dir,
-                        prefix=safe_name
-                    )
-
-                    features_audio_output_dir = Path(features_output_dir or "") / folder_name / safe_name
-                    features_audio_output_dir.mkdir(parents=True, exist_ok=True)
-
-                    plot_all_waveforms(
-                        original_audio=waveform_mono,
-                        components=factorization.components,
-                        component_names=factorization._components_names,
-                        sr=sample_rate,
-                        output_path=features_audio_output_dir,
-                        prefix=safe_name
-                    )
-                    
-                    plot_all_spectrograms(
-                        original_audio=waveform_mono,
-                        components=factorization.components,
-                        component_names=factorization._components_names,
-                        sr=sample_rate,
-                        output_path=features_audio_output_dir,
-                        prefix=safe_name
-                    )
-                    
-                for idx, comp_name in enumerate(factorization._components_names):
-                    component_audio = factorization.components[idx]
-
-                    component_audio_dir = Path(features_audio_output_dir or "") / comp_name
-                    component_audio_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    all_features = extract_all_features(component_audio, sr=sample_rate)
-
-                    features_for_track[comp_name] = to_native_dict(all_features)
-
-                    plot_enhanced_visualizations(
-                        component_audio,
-                        sr=sample_rate,
-                        prefix=f"{safe_name}_{comp_name}",
-                        output_dir=component_audio_dir
-                    )
-
-                    plot_spectral_summary(
-                        component_audio,
-                        sr=sample_rate,
-                        output_dir=component_audio_dir,
-                        prefix=f"{safe_name}_{comp_name}"
-                    )
-
-                    f0_contour = np.array(all_features.get('intonation_pattern', {}).get('f0_contour', []))
-                    pitch_times = np.array(all_features.get('intonation_pattern', {}).get('times', []))
-                    f0_contour_clean = np.nan_to_num(f0_contour, nan=0.0)
-
-                    if 'intonation_pattern' in all_features:
-                        all_features['intonation_pattern'].pop('f0_contour', None)
-                        all_features['intonation_pattern'].pop('times', None)
-
-                    if 'rhythm_stats' in all_features:
-                        all_features['rhythm_stats'].pop('beats_times', None)
-
-                    plot_f0_contour(
-                        y=component_audio,
-                        sr=sample_rate,
-                        f0=f0_contour_clean,
-                        times=pitch_times,
-                        title=f"{safe_name}_{comp_name} - Fundamental Frequency Contour",
-                        output_dir=component_audio_dir,
-                        prefix=f"{safe_name}_{comp_name}"
-                    )
-
-                    plot_mel_spectrogram_with_f0(
-                        y=component_audio,
-                        sr=sample_rate,
-                        f0=f0_contour_clean,
-                        times=pitch_times,
-                        title=f"{safe_name}_{comp_name} - Mel Spectrogram with Fundamental Frequency Contour",
-                        output_dir=component_audio_dir,
-                        prefix=f"{safe_name}_{comp_name}"
-                    )
                 features_all_tracks[safe_name] = features_for_track
 
         except Exception as e:
@@ -393,8 +273,16 @@ def run_features_extraction(
             folder_features_str_keys = {
                 str(k): {
                     "type": "full_track",
-                    "segment_id": None,
-                    "features": v
+                    "segments": {
+                        "segment_id": "full_track",
+                        "features": v,
+                        "segment_meta": {
+                            "component": "mixture",
+                            "model": folder.name,
+                            "track_stem": k,
+                            "segment_name": "full_track"
+                        }
+                    }
                 }
                 for k, v in folder_features.items()
                 if not isinstance(k, int) and not (isinstance(k, str) and k.isdigit())
@@ -437,7 +325,13 @@ def run_features_extraction(
 
                 for segment_id, features_data in filtered_segment_features.items():
                     merged_segmented_features[folder.name][audio_stem]["segments"][segment_id] = {
-                        "features": features_data
+                        "features": features_data,
+                        "segment_meta": {
+                            "component": "mixture",
+                            "model": folder.name,
+                            "track_stem": audio_stem,
+                            "segment_name": segment_id
+                        }
                     }
 
                 append_update_features(merged_segmented_features, Path(features_output_dir_segmented / "segmented_features.json"))

@@ -140,16 +140,19 @@ def run_sonics_predictions(
 
         folder_results = {}
         for audio_file, model_prob in zip(all_audio, probs):
+
+            orig_filename = Path(audio_file).stem
+            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', orig_filename)
+
             pred_class = "Fake" if model_prob > threshold else "Real"
-            key = audio_file.stem  # file name without extension
-            folder_results[key] = {
-                "type": "full_track",
-                "segment_id": None,
-                "predictions": {
-                    "file_path": str(audio_file),
-                    "model_prediction": float(model_prob),
-                    "predicted_class": pred_class
-                }
+            # key = audio_file.stem  # file name without extension
+            folder_results[safe_name] = {
+                "file_path": str(audio_file),
+                "model": folder.name,
+                "track_stem": safe_name,
+                "prediction": float(model_prob),
+                "predicted_class": pred_class,
+                "track_source": "Real" if folder.name.lower() == "real" else "Fake"
             }
         results[class_name] = folder_results
 
