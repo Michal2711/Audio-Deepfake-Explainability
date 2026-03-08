@@ -1,0 +1,16 @@
+# configs/AudioLIME_configs/compare_audiolime_results_across_runs.yaml
+
+files:
+  - "results/AudioLIME/FakeRealMusicOriginal/AudioLIME_500_samples_full_track/full_track/explanations.json"
+  - "results/AudioLIME/FakeRealMusicOriginalNormalized/minus14/reverb_room/AudioLIME_500_samples_full_track/full_track/explanations.json"
+  - "results/AudioLIME/FakeRealMusicOriginalNormalized/minus23/reverb_room/AudioLIME_500_samples_full_track/full_track/explanations.json"
+
+models:
+  - ElevenLabs
+  - SUNO
+  - SUNO_PRO
+  - UDIO
+  - REAL
+
+output:
+  result_path: "results/AudioLIME/Runs_comparison"
