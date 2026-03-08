@@ -48,13 +48,16 @@ scripts/
 │   ├── run_LIME_experiment.py
 │   └── run_spectrogram_experiment.py
 ├── feature_extraction/
-│   ├── run_FBP_patch_features.py
-│   ├── run_occlusion_patch_features.py
-│   └── run_features_extraction.py
-└── feature_visualizations/
-    ├── run_FBP_features_vis.py
-    ├── run_Occlusion_features_vis.py
-    └── run_sonics_predictions.py
+│   ├── run_fbp_patch_features.py
+|   ├── run_features_extraction.py
+│   ├── run_lime_features.py
+│   └── run_occlusion_patch_features.py
+├── feature_visualizations/
+│   ├── run_FBP_features_vis.py
+│   ├── run_LIME_features_vis.py
+│   ├── run_Occlusion_features_vis.py
+│   └── run_overall_features_vis.py.py
+└── run_sonics_predictions.py
 ```
 
 
@@ -168,12 +171,20 @@ python scripts/experiments/run_spectrogram_experiment.py \
 ## 5. Feature Extraction Pipelines
 For each experiment, the repository provides scripts that compute physically interpretable audio features based on the audio generated or modified during the explainability analyses.
 
+### 5.1. Overall Feature Extraction
+Extraction of overall features on all data without any experiment modifications (like separating component, frequency bands or occlusion map) can be extracted using:
+
+```bash
+python scripts/feature_extraction/run_features_extraction.py \
+  --config configs/Features_extraction/features_configs.yaml
+```
+
 ### 5.1 AudioLIME Feature Extraction
 For AudioLIME, feature extraction is performed on both the original track and the separated stems obtained during source separation:
 
 ```bash
 python scripts/feature_extraction/run_features_extraction.py \
-  --config configs/Features_extraction/features_configs.yaml
+  --config configs/AudioLIME_configs/lime_comp_features.yaml
 ```
 
 This script can be configured to compute a set of acoustic descriptors on full tracks and individual stems, enabling comparison of the contribution of different musical components (e.g., vocals vs. accompaniment).
