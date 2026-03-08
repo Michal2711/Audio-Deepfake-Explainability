@@ -1,0 +1,22 @@
+# configs/SONICS_predictions/sonics_pred_vis.yaml
+
+data:
+  predictions_path: "results/Predictions/FakeRealMusicOriginal/Sonics_predictions_SpecTTTra-α-120s/full_track/predictions.json"  # ścieżka do pliku predictions.json
+  
+visualizations:
+  models:
+    - ElevenLabs
+    - REAL
+    - SUNO
+    - SUNO_PRO
+    - UDIO
+  
+  colors:
+    ElevenLabs: "#ff7f0e"
+    REAL: "#1f77b4"
+    SUNO: "#2ca02c"
+    SUNO_PRO: "#d62728"
+    UDIO: "#9467bd"
+  
+output:
+  result_path: "results/Predictions/FakeRealMusicOriginal/Sonics_predictions_SpecTTTra-α-120s/full_track/predictions_visualizations"  # katalog wyjściowy
