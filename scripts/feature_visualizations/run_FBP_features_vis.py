@@ -537,7 +537,7 @@ def viz_component_pos_neg_boxplots(
             
             global_plot_data = []
             global_labels = []
-            for s in signs:
+            for sign in signs:
                 data = df.loc[df['influence_sign'] == sign, col].dropna()
                 if len(data) > 0:
                     global_plot_data.append(data.values)
@@ -1128,10 +1128,10 @@ def main():
         base_output_folder=output_root,
     )
 
-    viz_feature_groups_by_freq_band(
-        features_df,
-        base_output_folder=output_root
-    )
+    # viz_feature_groups_by_freq_band(
+    #     features_df,
+    #     base_output_folder=output_root
+    # )
 
 if __name__ == "__main__":
     main()

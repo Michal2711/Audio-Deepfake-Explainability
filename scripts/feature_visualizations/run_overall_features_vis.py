@@ -961,6 +961,179 @@ def viz_features_by_confusion_outcome(df, output_root: Path):
     print(f"✅ Saved TP/FP/TN/FN boxplots to: {out_dir}")
     print("=" * 80 + "\n")
 
+def viz_features_vs_prediction_scatter(merged_df, output_root: Path, confidence_threshold=0.3):
+    """
+    For each feature: scatterplot feature vs prediction_score
+    With colors: Confident REAL / Uncertain / Confident FAKE
+    + border lines
+    """
+
+    setup_professional_style()
+
+    base_folder = output_root / "scatter_prediction"
+    base_folder.mkdir(exist_ok=True, parents=True)
+
+    print("\n" + "=" * 80)
+    print("Creating scatter plots: features vs prediction scores...")
+    print("=" * 80 + "\n")
+
+    def categorize_confidence(pred_value):
+        if pd.isna(pred_value):
+            return "Unknown"
+        if abs(pred_value - 0.5) <= confidence_threshold:
+            return "Uncertain"
+        elif pred_value < 0.5:
+            return "Confident REAL"
+        else:
+            return "Confident FAKE"
+
+    df_plot = merged_df.copy()
+    df_plot["prediction_confidence"] = df_plot["prediction_score"].apply(
+        categorize_confidence
+    )
+
+    CONFIDENCE_COLORS = {
+        "Confident REAL": "#1f77b4",
+        "Uncertain": "#ff7f0e",
+        "Confident FAKE": "#d62728",
+        "Unknown": "#7f7f7f",
+    }
+
+    CONFIDENCE_ALPHA = {
+        "Confident REAL": 0.8,
+        "Uncertain": 0.6,
+        "Confident FAKE": 0.8,
+        "Unknown": 0.3,
+    }
+
+    base_exclude = {
+        "model",
+        "track_id",
+        "track_stem",
+        "data_type",
+        "prediction_score",
+        "pred_label",
+        "true_label",
+        "is_correct",
+        "outcome",
+        "prediction_confidence",
+    }
+
+    all_features = [
+        col
+        for col in df_plot.columns
+        if (
+            col not in base_exclude
+            and pd.api.types.is_numeric_dtype(df_plot[col])
+            and df_plot[col].notna().sum() > 0
+        )
+    ]
+
+    feature_groups = defaultdict(list)
+    for col in all_features:
+        parts = col.split("_")
+        if len(parts) > 1 and parts[-1] in ["min", "mean", "std", "max"]:
+            base_name = "_".join(parts[:-1])
+            stat = parts[-1]
+        else:
+            base_name = col
+            stat = "single"
+        feature_groups[base_name].append((col, stat))
+
+    print(f"Processing {len(feature_groups)} feature groups...\n")
+
+    for feature_base, columns_list in sorted(feature_groups.items()):
+        feature_folder = base_folder / feature_base
+        feature_folder.mkdir(exist_ok=True, parents=True)
+
+        stat_order = ["min", "mean", "std", "max"]
+        columns_sorted = sorted(
+            columns_list,
+            key=lambda x: next((i for i, s in enumerate(stat_order) if s == x[1]), 999),
+        )
+
+        for col, stat in columns_sorted:
+
+            fig, ax = plt.subplots(1, 1, figsize=(14, 10))
+            fig.patch.set_facecolor("white")
+
+            plot_data = df_plot[
+                [col, "prediction_score", "prediction_confidence"]
+            ].dropna()
+
+            if len(plot_data) > 0:
+                for confidence in ["Confident REAL", "Uncertain", "Confident FAKE"]:
+                    conf_data = plot_data[
+                        plot_data["prediction_confidence"] == confidence
+                    ]
+                    if len(conf_data) > 0:
+                        ax.scatter(
+                            conf_data[col],
+                            conf_data["prediction_score"],
+                            alpha=CONFIDENCE_ALPHA[confidence],
+                            s=80,
+                            color=CONFIDENCE_COLORS[confidence],
+                            label=confidence,
+                            edgecolors="black",
+                            linewidth=0.7,
+                        )
+
+                ax.axhline(y=0.5, color="black", linestyle="-", linewidth=2, alpha=0.7)
+                ax.axhline(
+                    y=0.5 - confidence_threshold,
+                    color="gray",
+                    linestyle="--",
+                    linewidth=1.5,
+                    alpha=0.7,
+                    label=f"Confidence threshold ±{confidence_threshold}",
+                )
+                ax.axhline(
+                    y=0.5 + confidence_threshold,
+                    color="gray",
+                    linestyle="--",
+                    linewidth=1.5,
+                    alpha=0.7,
+                )
+
+                ax.fill_between(
+                    ax.get_xlim(),
+                    0.5 - confidence_threshold,
+                    0.5 + confidence_threshold,
+                    color="orange",
+                    alpha=0.08,
+                )
+
+                ax.set_xlabel(f"{col}", fontsize=13, fontweight="bold")
+                ax.set_ylabel("Model Prediction P(Fake)", fontsize=13, fontweight="bold")
+                ax.set_title(
+                    f"{feature_base.replace('_', ' ').title()} vs Prediction Score",
+                    fontsize=14,
+                    fontweight="bold",
+                    pad=15,
+                )
+                ax.set_ylim(-0.05, 1.05)
+
+                ax.grid(alpha=0.3, linestyle="--", linewidth=0.8)
+                ax.set_axisbelow(True)
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                ax.spines["left"].set_linewidth(1.8)
+                ax.spines["bottom"].set_linewidth(1.8)
+                ax.legend(fontsize=11, loc="best", framealpha=0.95)
+
+            plt.tight_layout()
+            out_file = feature_folder / f"{col}_scatter_analysis.png"
+            plt.savefig(out_file, dpi=300, bbox_inches="tight", facecolor="white")
+            plt.close()
+
+            print(f"  ✓ {feature_base}/{col}: scatter_analysis.png")
+
+    print("\n" + "=" * 80)
+    print("✅ Scatter vs prediction plots created!")
+    print(f"   • Output folder: {base_folder}/")
+    print("=" * 80 + "\n")
+
+
 def parse_args():
     ap = argparse.ArgumentParser(
         description="Visualize full-track audio features vs model predictions."
@@ -1005,6 +1178,9 @@ def main():
 
     # Features for TP / FP / TN / FN
     viz_features_by_confusion_outcome(merged_df, output_root)
+
+    # Scatter plots: feature value vs prediction score, colored by confidence
+    viz_features_vs_prediction_scatter(merged_df, output_root, confidence_threshold=0.3)
 
 if __name__ == "__main__":
     main()
