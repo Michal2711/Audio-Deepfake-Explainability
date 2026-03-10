@@ -13,4 +13,4 @@ models:
   - REAL
 
 output:
-  result_path: "results/AudioLIME/Runs_comparison"
+  result_path: "results/AudioLIME/Runs_comparison/AudioLIME_500_samples_full_track"

@@ -1,0 +1,16 @@
+# configs/AudioLIME_configs/compare_audiolime_results_across_runs.yaml
+
+files:
+  - "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_mixture/"
+  - "results/FBP/FakeRealMusicOriginalNormalized/minus14/base/FBP_default_preset_rel_stft_att_0.25_mixture/"
+  - "results/FBP/FakeRealMusicOriginalNormalized/minus23/base/FBP_default_preset_rel_stft_att_0.25_mixture/"
+
+models:
+  - ElevenLabs
+  - SUNO
+  - SUNO_PRO
+  - UDIO
+  - REAL
+
+output:
+  result_path: "results/FBP/Runs_comparison/FBP_default_preset_rel_stft_att_0.25_mixture"

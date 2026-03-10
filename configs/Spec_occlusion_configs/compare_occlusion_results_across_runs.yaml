@@ -1,0 +1,9 @@
+files:
+  - "results/SpectrogramExplainability/FakeRealMusicOriginal/Occlusion/Full_Occlusion_2048_128_all_models"
+  - "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus14/reverb_room/Occlusion/Full_Occlusion_2048_128_all_models"
+  - "results/SpectrogramExplainability/FakeRealMusicOriginalNormalized/minus23/reverb_room/Occlusion/Full_Occlusion_2048_128_all_models"
+
+output:
+  result_path: "results/SpectrogramExplainability/Runs_comparison/Full_Occlusion_2048_128_all_models"
+
+max_rank: 50 # number of top features to consider for the comparison

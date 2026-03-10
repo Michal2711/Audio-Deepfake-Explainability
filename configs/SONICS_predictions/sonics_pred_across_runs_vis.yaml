@@ -16,4 +16,4 @@ threshold: 0.5
 annotate: true
 
 output:
-  result_path: "results/Predictions/Runs_comparison"
+  result_path: "results/Predictions/Runs_comparison/Sonics_predictions_SpecTTTra-α-120s"
