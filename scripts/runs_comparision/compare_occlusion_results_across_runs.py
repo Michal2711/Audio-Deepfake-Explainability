@@ -1,11 +1,12 @@
-# compare_fbp_results_across_runs.py
+# compare_occlusion_results_across_runs.py
 
 import json
 import argparse
 from pathlib import Path
-from typing import Sequence, Dict, Any
+from typing import Sequence, Dict, Any, Tuple
 import re
 import yaml
+
 import numpy as np
 import pandas as pd
 import sys
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
 
 def setup_professional_style():
     plt.rcParams["font.family"] = "sans-serif"
@@ -39,6 +41,7 @@ def setup_professional_style():
 
     sns.set_palette("husl")
 
+
 PALETTE = [
     "#1f77b4",
     "#ff7f0e",
@@ -57,11 +60,13 @@ PALETTE = [
     "#f7b6d2",
 ]
 
+
 def try_num(s: str) -> int:
     if isinstance(s, bytes):
         s = s.decode("utf-8", errors="ignore")
     match = re.match(r"^(\d+)", s)
     return int(match.group(1)) if match else 999999
+
 
 def extract_run_label(file_path: str) -> str:
     path = Path(file_path)
@@ -92,97 +97,134 @@ def extract_run_label(file_path: str) -> str:
     else:
         return path.parent.name if path.parent.name != "." else path.stem[:20]
 
-def load_single_fbp_root(fbp_root: Path, run_label: str) -> pd.DataFrame:
+def get_freq_unit(label: str) -> str:
+    """Dynamiczna jednostka: 'Mel' jeśli 'mel' w nazwie, 'Hz' dla STFT/innych."""
+    name_lower = label.lower()
+    if 'mel' in name_lower:
+        return 'Mel'
+    elif 'stft' in name_lower:
+        return 'Hz'
+    else:
+        return 'Mel'
+
+def load_single_occlusion_root(occ_root: Path, run_label: str) -> pd.DataFrame:
     rows = []
 
-    bands_root = fbp_root / "bands"
-    if not bands_root.exists():
-        print(f"[ERROR] Bands directory not found: {bands_root}")
+    sal_root = occ_root / "saliency_maps"
+    if not sal_root.exists():
+        print(f"[ERROR] saliency_maps directory not found: {sal_root}")
         return pd.DataFrame()
 
-    for model_dir in sorted(bands_root.iterdir()):
+    unit = get_freq_unit(run_label)
+
+    for model_dir in sorted(sal_root.iterdir()):
         if not model_dir.is_dir():
             continue
         model_name = model_dir.name
 
         track_dirs = [d for d in model_dir.iterdir() if d.is_dir()]
         for track_dir in track_dirs:
-            if not track_dir.is_dir():
-                continue
             track_stem = track_dir.name
+            all_dir = track_dir / "top_windows" / "all"
+            if not all_dir.exists():
+                continue
 
-            for component_dir in track_dir.iterdir():
-                if not component_dir.is_dir():
-                    continue
-                component = component_dir.name
+            json_files = sorted(all_dir.glob("*.json"))
+            if not json_files:
+                continue
 
-                meta_path = component_dir / f"{track_stem}_bands_metadata.json"
-                if not meta_path.exists():
-
-                    continue
-
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-
-                bands = meta.get("bands", [])
-                if not bands:
+            for jf in json_files:
+                try:
+                    with open(jf, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                except Exception as e:
+                    print(f"[WARN] Failed to load {jf}: {e}")
                     continue
 
-                for band_idx, band in enumerate(bands):
-                    low = float(band["low"])
-                    high = float(band["high"])
-                    importance = float(band["importance"])
-                    abs_importance = float(band["abs_importance"])
-                    btype = band.get("type", "unknown")
-                    comp_from_meta = band.get("component", component)
+                file_name = meta.get("file_name", track_stem)
+                windows = meta.get("windows", [])
+                if not windows:
+                    continue
 
-                    rows.append(
-                        {
-                            "data_source": model_name,
-                            "track_stem": track_stem,
-                            "track_index": try_num(track_stem),
-                            "component": comp_from_meta,
-                            "band_index": band_idx,
-                            "low_freq": low,
-                            "high_freq": high,
-                            "band_center": 0.5 * (low + high),
-                            "importance": importance,
-                            "abs_importance": abs_importance,
-                            "band_type": btype,
-                            "run": run_label,
-                        }
-                    )
+                for w in windows:
+                    rank = int(w.get("rank", 0))
+
+                    t_start = int(w.get("t_start", 0))
+                    t_end = int(w.get("t_end", 0))
+                    f_start = float(w.get("f_start", 0.0))
+                    f_end = float(w.get("f_end", 0.0))
+
+                    start_sec = float(w.get("start_time_sec", 0.0))
+                    end_sec = float(w.get("end_time_sec", 0.0))
+                    importance = float(w.get("importance", np.nan))
+                    abs_importance = float(w.get("abs_importance", np.nan))
+                    wtype = w.get("type", "unknown")
+
+                    time_label = f"{start_sec:.1f}-{end_sec:.1f}s"
+                    freq_label = f"{int(f_start)}-{int(f_end)}{unit}"
+                    window_label = f"{time_label}, {freq_label}"
+
+                    rows.append({
+                        "data_source": model_name,
+                        "track_stem": track_stem,
+                        "track_index": try_num(track_stem),
+                        "file_name": file_name,
+                        "rank": rank,
+                        "t_start": t_start,
+                        "t_end": t_end,
+                        "f_start": f_start,
+                        "f_end": f_end,
+                        "start_sec": start_sec,
+                        "end_sec": end_sec,
+                        "window_label": window_label,
+                        "importance": importance,
+                        "abs_importance": abs_importance,
+                        "window_type": wtype,
+                        "run": run_label,
+                    })
 
     df = pd.DataFrame(rows)
     return df
 
-def load_fbp_bands_for_runs(fbp_roots: Sequence[str]) -> tuple[pd.DataFrame, str]:
+
+
+def load_occlusion_windows_for_runs(
+    occ_roots: Sequence[str], max_rank: int | None = None
+) -> Tuple[pd.DataFrame, str]:
     dfs = []
     runs_labels = ""
 
-    for p in fbp_roots:
-        fbp_root = Path(p)
+    for p in occ_roots:
+        occ_root = Path(p)
         run_label = extract_run_label(p)
         runs_labels += f"{run_label}_"
 
-        print(f"📂 Loading FBP bands from: {fbp_root} (run: {run_label})")
-        df_run = load_single_fbp_root(fbp_root, run_label)
+        print(f"📂 Loading Occlusion windows from: {occ_root} (run: {run_label})")
+        df_run = load_single_occlusion_root(occ_root, run_label)
         if df_run.empty:
-            print(f"[WARN] No data loaded from {fbp_root}")
+            print(f"[WARN] No data loaded from {occ_root}")
             continue
 
+        if max_rank is not None:
+            df_run = df_run[df_run["rank"] <= max_rank].copy()
+
         dfs.append(df_run)
-        print(f"✅ Loaded {len(df_run)} band rows from {fbp_root}")
+        print(f"✅ Loaded {len(df_run)} window rows from {occ_root}")
 
     if not dfs:
-        raise ValueError("No FBP data loaded from any run!")
+        raise ValueError("No Occlusion data loaded from any run!")
 
     df_all = pd.concat(dfs, ignore_index=True)
 
-    key_cols = ["data_source", "track_stem", "component", "low_freq", "high_freq"]
-    keys_per_run = [
-        df.groupby(key_cols).size() > 0 for _, df in df_all.groupby("run")
+    key_cols = [
+        "data_source",
+        "track_stem",
+        "t_start",
+        "t_end",
+        "f_start",
+        "f_end",
     ]
+    keys_per_run = [df.groupby(key_cols).size() > 0 for _, df in df_all.groupby("run")]
 
     common_mask = keys_per_run[0].reindex(keys_per_run[0].index).fillna(False)
     for mask in keys_per_run[1:]:
@@ -193,18 +235,20 @@ def load_fbp_bands_for_runs(fbp_roots: Sequence[str]) -> tuple[pd.DataFrame, str
     df_common = df_all[idx.isin(common_idx)].copy()
 
     df_common = df_common.sort_values(
-        ["data_source", "component", "band_center", "run"]
+        ["data_source", "start_sec", "f_start", "run", "track_index"]
     ).reset_index(drop=True)
 
     print(
-        f"✅ Common FBP data: {len(df_common)} rows across "
+        f"✅ Common Occlusion data: {len(df_common)} rows across "
         f"{df_common['data_source'].nunique()} sources"
     )
     print(f"   Runs: {sorted(df_common['run'].unique())}")
 
     return df_common, runs_labels.strip("_")
 
-def plot_fbp_band_importances(df_common: pd.DataFrame, output_dir: Path | None = None):
+def plot_occlusion_windows_importances(
+    df_common: pd.DataFrame, output_dir: Path | None = None
+):
     setup_professional_style()
     sns.set_theme(style="whitegrid")
 
@@ -222,30 +266,23 @@ def plot_fbp_band_importances(df_common: pd.DataFrame, output_dir: Path | None =
         idx_pos = {t: i for i, t in enumerate(tracks)}
         dprov["file_index"] = dprov["track_stem"].map(idx_pos)
 
-        dprov["band_label"] = (
-            dprov["low_freq"].astype(int).astype(str)
-            + "-"
-            + dprov["high_freq"].astype(int).astype(str)
-            + " Hz"
-        )
-
-        bands_order = (
-            dprov[["band_label", "low_freq"]]
+        windows_order = (
+            dprov[["window_label", "start_sec", "f_start"]]
             .drop_duplicates()
-            .sort_values("low_freq")["band_label"]
+            .sort_values(["start_sec", "f_start"])["window_label"]
             .tolist()
         )
-        if not bands_order:
+        if not windows_order:
             continue
 
         g = sns.FacetGrid(
             dprov,
-            col="band_label",
-            col_order=bands_order,
+            col="window_label",
+            col_order=windows_order,
             hue="run",
-            height=3.2,
-            aspect=1.4,
-            col_wrap=3,
+            height=3.0,
+            aspect=1.3,
+            col_wrap=5,
             sharey=False,
             palette="husl",
             legend_out=False,
@@ -265,7 +302,7 @@ def plot_fbp_band_importances(df_common: pd.DataFrame, output_dir: Path | None =
             x="file_index",
             y="importance",
             legend=False,
-            s=90,             
+            s=80,
             alpha=0.9,
             edgecolor="white",
             linewidth=0.8,
@@ -273,8 +310,9 @@ def plot_fbp_band_importances(df_common: pd.DataFrame, output_dir: Path | None =
 
         g.set_axis_labels("file index", "importance")
         g.set_titles(col_template="{col_name}")
+        unit = get_freq_unit(df_common['run'].iloc[0])
         g.fig.suptitle(
-            f"{prov}: FBP band importance vs file index ({legend_runs})",
+            f"{prov}: Occlusion window importance vs file index ({unit}) ({legend_runs})",
             y=1.02,
             fontsize=12,
         )
@@ -310,10 +348,10 @@ def plot_fbp_band_importances(df_common: pd.DataFrame, output_dir: Path | None =
         )
 
         g.fig.subplots_adjust(right=0.78)
-        plt.subplots_adjust(bottom=0.05)
+        plt.subplots_adjust(bottom=0.06)
 
         if output_dir:
-            outfile = output_dir / f"{prov}_fbp_band_importances_by_track.png"
+            outfile = output_dir / f"{prov}_occlusion_windows_by_track.png"
             plt.savefig(outfile, dpi=300, bbox_inches="tight", facecolor="white")
             print(f"💾 Saved: {outfile}")
 
@@ -321,34 +359,39 @@ def plot_fbp_band_importances(df_common: pd.DataFrame, output_dir: Path | None =
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FBP band importance – runs comparison (FacetGrid style)"
+        description="Occlusion window importance – runs comparison (FacetGrid style)"
     )
     parser.add_argument(
         "--config",
         type=str,
         required=True,
-        help="Path to config.yaml (with list of FBP roots in 'files')",
+        help="Path to config.yaml (with list of Occlusion roots in 'files')",
     )
     args = parser.parse_args()
 
     with open(Path(args.config), "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    fbp_roots = config.get("files", [])
-    if not fbp_roots:
-        print("❌ No FBP roots specified in config['files']!")
+    occ_roots = config.get("files", [])
+    if not occ_roots:
+        print("❌ No Occlusion roots specified in config['files']!")
         return
 
-    df_common, runs_labels = load_fbp_bands_for_runs(fbp_roots)
+    max_rank = config.get("max_rank", None)
+    if max_rank is not None:
+        print(f"Limiting windows to rank <= {max_rank}")
+
+    df_common, runs_labels = load_occlusion_windows_for_runs(occ_roots, max_rank)
 
     output_cfg = config.get("output", {})
     output_dir = (
-        Path(output_cfg.get("result_path", "results/FBP/Runs_comparison")) / runs_labels
+        Path(output_cfg.get("result_path", "results/Occlusion/Runs_comparison"))
+        / runs_labels
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    plot_fbp_band_importances(df_common, output_dir)
-    print(f"✅ All FBP plots saved to {output_dir}")
+    plot_occlusion_windows_importances(df_common, output_dir)
+    print(f"✅ All Occlusion plots saved to {output_dir}")
 
 
 if __name__ == "__main__":
