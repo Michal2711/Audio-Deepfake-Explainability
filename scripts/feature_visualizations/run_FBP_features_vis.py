@@ -1091,6 +1091,310 @@ def _viz_single_feature_in_band(band_df, col, feature_folder, models, signs, fea
     plt.close(fig)
     print(f" ✓ Saved: {out_file}")
 
+def viz_single_feature_vs_importance_in_freq_band(
+    band_df,
+    feature_col,
+    feature_folder,
+    feature_label,
+    importance_col="importance",
+    sign_col="influence_sign",
+):
+    """
+    Dla jednego pasma częstotliwości (freq_band) i jednej cechy
+    rysuje kilka paneli obok siebie: osobny panel per model,
+    wykres scatter: feature_value vs importance.
+    """
+    required_cols = [feature_col, importance_col, "model", sign_col]
+    for col in required_cols:
+        if col not in band_df.columns:
+            return
+
+    feature_df = band_df[required_cols].dropna(
+        subset=[feature_col, importance_col]
+    ).copy()
+    if feature_df.empty:
+        return
+
+    models = sorted(feature_df["model"].dropna().unique().tolist())
+    if not models:
+        return
+
+    n_models = len(models)
+    fig, axes = plt.subplots(
+        1, n_models, figsize=(4 * n_models, 6), sharey=True
+    )
+    if n_models == 1:
+        axes = [axes]
+
+    for ax, model_name in zip(axes, models):
+        model_df = feature_df[feature_df["model"] == model_name]
+        if model_df.empty:
+            ax.set_visible(False)
+            continue
+
+        color_hex = PROFESSIONAL_COLORS.get(model_name, "#333333")
+
+        positive_df = model_df[model_df[sign_col] == "positive"]
+        negative_df = model_df[model_df[sign_col] == "negative"]
+
+        # dodatnie wpływy – pełne kółka
+        if not positive_df.empty:
+            ax.scatter(
+                positive_df[feature_col],
+                positive_df[importance_col],
+                color=color_hex,
+                alpha=0.8,
+                edgecolors="black",
+                linewidth=0.5,
+                s=50,
+                marker="o",
+                label="positive",
+            )
+
+        # ujemne wpływy – wyraźne X
+        if not negative_df.empty:
+            ax.scatter(
+                negative_df[feature_col],
+                negative_df[importance_col],
+                color=color_hex,
+                alpha=0.4,
+                edgecolors="black",
+                linewidth=1.8,
+                s=70,
+                marker="X",
+                label="negative",
+            )
+
+        ax.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.7)
+
+        ax.set_title(
+            model_name,
+            fontsize=12,
+            fontweight="bold",
+            pad=10,
+        )
+
+        ax.grid(alpha=0.3, linestyle="--", linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_linewidth(1.5)
+        ax.spines["bottom"].set_linewidth(1.5)
+
+        x_vals = model_df[feature_col].values
+        y_vals = model_df[importance_col].values
+        stats_text = f"n = {len(model_df)}"
+        if len(model_df) >= 2:
+            try:
+                corr = np.corrcoef(x_vals, y_vals)[0, 1]
+            except Exception:
+                corr = np.nan
+            if not np.isnan(corr):
+                stats_text += f"\nPearson r = {corr:.3f}"
+
+        ax.text(
+            0.98,
+            0.02,
+            stats_text,
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                facecolor="white",
+                alpha=0.9,
+                edgecolor="black",
+                linewidth=0.8,
+            ),
+        )
+
+    # wspólne etykiety osi
+    fig.supxlabel(feature_label, fontsize=13, fontweight="bold")
+    fig.supylabel("Band importance", fontsize=13, fontweight="bold")
+
+    # czytelne ticki X
+    for ax in axes:
+        ax.tick_params(axis="x", labelrotation=45, labelsize=10)
+        ax.xaxis.set_tick_params(labelbottom=True)
+
+    # wspólna legenda dla znaków
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor="blue",
+            markeredgecolor="black",
+            label="positive",
+            markersize=8,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="X",
+            color="w",
+            markeredgecolor="black",
+            label="negative",
+            markersize=8,
+            linewidth=1.8,
+        ),
+    ]
+    fig.legend(
+        handles=legend_elements,
+        title="Signs of influence",
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.98),
+        fontsize=9,
+        title_fontsize=10,
+    )
+
+    fig.suptitle(
+        f"{feature_label} vs importance – per model",
+        fontsize=15,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    fig.tight_layout(rect=(0.03, 0.05, 0.97, 0.93))
+
+    safe_label = feature_label.replace(" ", "_").replace("/", "_")
+    outfile = feature_folder / f"{safe_label}_vs_importance_per_model.png"
+    fig.savefig(outfile, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+    print(outfile)
+
+def viz_feature_values_vs_importance_by_freq_band(
+    features_df,
+    base_output_folder=Path("."),
+    importance_col="importance",
+    freq_band_col="freq_band",
+    band_type_col="band_type",
+):
+    """
+    For each frequency band (freq_band) and each feature, draws plots: feature_value vs band importance, split by models.
+    """
+    setup_professional_style()
+
+    df = features_df.copy()
+
+    if importance_col not in df.columns:
+        raise ValueError(f"Column '{importance_col}' not found")
+
+    if band_type_col in df.columns:
+        df["influence_sign"] = (
+            df[band_type_col].astype(str).str.lower().replace({"positive": "positive", "negative": "negative"})
+        )
+    else:
+        df["influence_sign"] = np.where(
+            df[importance_col] >= 0, "positive", "negative"
+        )
+
+    if freq_band_col not in df.columns:
+        raise ValueError(f"Column '{freq_band_col}' not found (run add_freq_band_from_band_key first).")
+
+    bands = sorted(df[freq_band_col].dropna().unique().tolist())
+    print(f"Processing {len(bands)} frequency bands for feature vs importance...")
+
+    for band in bands:
+        band_df = df[df[freq_band_col] == band].copy()
+        if band_df.empty:
+            print(f"Skipping empty band {band}")
+            continue
+
+        band_safe = str(band).replace(" ", "_")
+        band_base_folder = (
+            Path(base_output_folder)
+            / "by_freq_band_feature_vs_importance"
+            / band_safe
+        )
+        band_base_folder.mkdir(parents=True, exist_ok=True)
+
+        exclude_cols = [
+            "model",
+            "track",
+            "band_key",
+            "data_type",
+            importance_col,
+            "influence_sign",
+            freq_band_col,
+        ]
+        band_meta_cols = [
+            "component",
+            "importance",
+            "abs_importance",
+            "low_freq",
+            "high_freq",
+            "band_type",
+            "model",
+            "track_stem",
+        ]
+
+        all_cols = [
+            col
+            for col in band_df.columns
+            if col not in exclude_cols
+            and col not in band_meta_cols
+            and band_df[col].dtype in (np.float64, np.float32, np.int64, np.int32)
+            and band_df[col].notna().sum() > 0
+        ]
+
+        feature_groups = defaultdict(list)
+        for col in all_cols:
+            parts = col.split("_")
+            if len(parts) > 1 and parts[-1] in ("min", "mean", "std", "max"):
+                base_name = "_".join(parts[:-1])
+                stat = parts[-1]
+            else:
+                base_name = col
+                stat = "single"
+            feature_groups[base_name].append((col, stat))
+
+        print(f"{band}: {len(feature_groups)} feature groups")
+
+        for feature_base, columns_list in sorted(feature_groups.items()):
+            feature_folder = band_base_folder / feature_base
+            feature_folder.mkdir(parents=True, exist_ok=True)
+
+            if len(columns_list) == 1 and columns_list[0][1] == "single":
+                col, _ = columns_list[0]
+                feature_label = f"{feature_base}"
+                viz_single_feature_vs_importance_in_freq_band(
+                    band_df,
+                    col,
+                    feature_folder,
+                    feature_label,
+                    importance_col=importance_col,
+                    sign_col="influence_sign",
+                )
+            else:
+                stat_order = ["min", "mean", "std", "max"]
+                columns_sorted = sorted(
+                    columns_list,
+                    key=lambda x: next(
+                        (i for i, s in enumerate(stat_order) if s == x[1]), 999
+                    ),
+                )
+                for col, stat in columns_sorted:
+                    if stat == "single":
+                        feature_label = feature_base
+                    else:
+                        feature_label = f"{feature_base} ({stat.upper()})"
+                    viz_single_feature_vs_importance_in_freq_band(
+                        band_df,
+                        col,
+                        feature_folder,
+                        feature_label,
+                        importance_col=importance_col,
+                        sign_col="influence_sign",
+                    )
+
+        print(f"{band_base_folder} done")
+
+
 def main():
     args = parse_args()
     config = load_yaml(Path(args.config))
@@ -1128,10 +1432,15 @@ def main():
         base_output_folder=output_root,
     )
 
-    # viz_feature_groups_by_freq_band(
-    #     features_df,
-    #     base_output_folder=output_root
-    # )
+    viz_feature_groups_by_freq_band(
+        features_df,
+        base_output_folder=output_root
+    )
+
+    viz_feature_values_vs_importance_by_freq_band(
+        features_df,
+        base_output_folder=output_root,
+    )
 
 if __name__ == "__main__":
     main()

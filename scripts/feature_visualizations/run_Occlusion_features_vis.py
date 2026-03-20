@@ -297,6 +297,43 @@ def add_group_from_patch_key(features_df):
 
     return df
 
+def add_window_label_from_patch_meta(features_df):
+    """
+    Z (starttimesec, endtimesec, fstart, fend) tworzy etykietę okna spektrogramu,
+    np. '0-6s_0-512Mel', '6-12s_512-1024Mel'.
+    """
+    df = features_df.copy()
+
+    # sprawdź, czy mamy potrzebne kolumny
+    required_cols = ["tstart", "tend", "fstart", "fend"]
+    for col in required_cols:
+        if col not in df.columns:
+            print(f"Warning: Column '{col}' not found, skipping window labels.")
+            return df
+
+    # zaokrąglenie do 1 miejsca po przecinku
+    df["t_start"] = df["tstart"].round(1)
+    df["t_end"] = df["tend"].round(1)
+    df["f_start"] = df["fstart"].round(0).astype(int)
+    df["f_end"] = df["fend"].round(0).astype(int)
+
+    # etykieta okna: "t_start-t_end s_f_start-f_end Mel"
+    df["window_label"] = (
+        df["t_start"].astype(str)
+        + "-"
+        + df["t_end"].astype(str)
+        + "s_"
+        + df["f_start"].astype(str)
+        + "-"
+        + df["f_end"].astype(str)
+        + "Mel"
+    )
+
+    print(f"Added window_label: {df['window_label'].nunique()} unique windows")
+    print("Sample windows:", df["window_label"].value_counts().head().to_dict())
+    return df
+
+
 def setup_professional_style():
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica']
@@ -1650,6 +1687,312 @@ def viz_most_influential_pos_neg_boxplots(
     print(f"✅ Ready for academic thesis presentation!")
     print(f"{'='*80}\n")
 
+def viz_single_feature_vs_importance_in_group(
+    group_df,
+    feature_col,
+    feature_folder,
+    feature_label,
+    importance_col="importance",
+    sign_col="influence_sign",
+):
+    """
+    Dla jednej grupy patchy (np. 'mostinfluential', 'best', 'worst')
+    i jednej cechy rysuje kilka paneli obok siebie: osobny panel per model,
+    wykres scatter: feature_value vs importance.
+    """
+    required_cols = [feature_col, importance_col, "model", sign_col]
+    for col in required_cols:
+        if col not in group_df.columns:
+            return
+
+    feature_df = group_df[required_cols].dropna(
+        subset=[feature_col, importance_col]
+    ).copy()
+    if feature_df.empty:
+        return
+
+    models = sorted(feature_df["model"].dropna().unique().tolist())
+    if not models:
+        return
+
+    n_models = len(models)
+    fig, axes = plt.subplots(
+        1, n_models, figsize=(4 * n_models, 6), sharey=True
+    )
+    if n_models == 1:
+        axes = [axes]
+
+    for ax, model_name in zip(axes, models):
+        model_df = feature_df[feature_df["model"] == model_name]
+        if model_df.empty:
+            ax.set_visible(False)
+            continue
+
+        color_hex = PROFESSIONAL_COLORS.get(model_name, "333333")
+        if not color_hex.startswith("#"):
+            color_hex = "#" + color_hex
+
+        positive_df = model_df[model_df[sign_col] == "positive"]
+        negative_df = model_df[model_df[sign_col] == "negative"]
+
+        # dodatnie wpływy – pełne kółka
+        if not positive_df.empty:
+            ax.scatter(
+                positive_df[feature_col],
+                positive_df[importance_col],
+                color=color_hex,
+                alpha=0.8,
+                edgecolors="black",
+                linewidth=0.5,
+                s=50,
+                marker="o",
+                label="positive",
+            )
+
+        # ujemne wpływy – wyraźne X
+        if not negative_df.empty:
+            ax.scatter(
+                negative_df[feature_col],
+                negative_df[importance_col],
+                color=color_hex,
+                alpha=0.4,
+                edgecolors="black",
+                linewidth=1.8,
+                s=70,
+                marker="X",
+                label="negative",
+            )
+
+        ax.axhline(0.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.7)
+
+        ax.set_title(
+            model_name,
+            fontsize=12,
+            fontweight="bold",
+            pad=10,
+        )
+
+        ax.grid(alpha=0.3, linestyle="--", linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_linewidth(1.5)
+        ax.spines["bottom"].set_linewidth(1.5)
+
+        x_vals = model_df[feature_col].values
+        y_vals = model_df[importance_col].values
+        stats_text = f"n = {len(model_df)}"
+        if len(model_df) >= 2:
+            try:
+                corr = np.corrcoef(x_vals, y_vals)[0, 1]
+            except Exception:
+                corr = np.nan
+            if not np.isnan(corr):
+                stats_text += f"\nPearson r = {corr:.3f}"
+
+        ax.text(
+            0.98,
+            0.02,
+            stats_text,
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                facecolor="white",
+                alpha=0.9,
+                edgecolor="black",
+                linewidth=0.8,
+            ),
+        )
+
+    # wspólne etykiety osi
+    fig.supxlabel(feature_label, fontsize=13, fontweight="bold")
+    fig.supylabel("Patch importance", fontsize=13, fontweight="bold")
+
+    # czytelne ticki X
+    for ax in axes:
+        ax.tick_params(axis="x", labelrotation=45, labelsize=10)
+        ax.xaxis.set_tick_params(labelbottom=True)
+
+    # wspólna legenda dla znaków
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor="blue",
+            markeredgecolor="black",
+            label="positive",
+            markersize=8,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="X",
+            color="w",
+            markeredgecolor="black",
+            label="negative",
+            markersize=8,
+            linewidth=1.8,
+        ),
+    ]
+    fig.legend(
+        handles=legend_elements,
+        title="Signs of influence",
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.98),
+        fontsize=9,
+        title_fontsize=10,
+    )
+
+    fig.suptitle(
+        f"{feature_label} vs importance – per model",
+        fontsize=15,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    fig.tight_layout(rect=(0.03, 0.05, 0.97, 0.93))
+
+    safe_label = feature_label.replace(" ", "_").replace("/", "_")
+    outfile = feature_folder / f"{safe_label}_vs_importance_per_model.png"
+    fig.savefig(outfile, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+    print(outfile)
+
+
+def viz_feature_values_vs_importance_by_group(
+    features_df,
+    base_output_folder=Path("."),
+    importance_col="importance",
+    window_col="window_label",
+):
+    """
+    For each group of patches (group) and each feature,
+    draws plots: feature_value vs patch importance, split by models.
+    """
+    setup_professional_style()
+    df = features_df.copy()
+
+    if importance_col not in df.columns:
+        raise ValueError(f"Column '{importance_col}' not found")
+
+    df["influence_sign"] = np.where(
+        df[importance_col] >= 0, "positive", "negative"
+    )
+
+    if window_col not in df.columns:
+        raise ValueError(f"Column '{window_col}' not found")
+
+    windows = sorted(df[window_col].dropna().unique().tolist())
+
+    print(f"Processing {len(windows)} windows for feature vs importance...")
+
+    for window_name in windows:
+        window_df = df[df[window_col] == window_name].copy()
+        if window_df.empty:
+            print(f"Skipping empty window {window_name}")
+            continue
+
+        window_safe = str(window_name).replace(" ", "_")
+        window_base_folder = (
+            Path(base_output_folder)
+            / "by_group_feature_vs_importance"
+            / window_safe
+        )
+        window_base_folder.mkdir(parents=True, exist_ok=True)
+
+        exclude_cols = [
+            "model",
+            "track",
+            "patch_key",
+            "data_type",
+            importance_col,
+            "influence_sign",
+            window_col,
+        ]
+        occlusion_meta_cols = [
+            "group",
+            "rank",
+            "importance",
+            "abs_importance",
+            "t_start",
+            "t_end",
+            "f_start",
+            "f_end",
+            "start_time_sec",
+            "end_time_sec",
+            "patch_type",
+            "model",
+            "track_stem",
+        ]
+
+        all_cols = [
+            col
+            for col in window_df.columns
+            if col not in exclude_cols
+            and col not in occlusion_meta_cols
+            and window_df[col].dtype in (np.float64, np.float32, np.int64, np.int32)
+            and window_df[col].notna().sum() > 0
+        ]
+
+        feature_windows = defaultdict(list)
+        for col in all_cols:
+            parts = col.split("_")
+            if len(parts) > 1 and parts[-1] in ("min", "mean", "std", "max"):
+                base_name = "_".join(parts[:-1])
+                stat = parts[-1]
+            else:
+                base_name = col
+                stat = "single"
+            feature_windows[base_name].append((col, stat))
+
+        print(f"{window_name}: {len(feature_windows)} feature windows")
+
+        for feature_base, columns_list in sorted(feature_windows.items()):
+            feature_folder = window_base_folder / feature_base
+            feature_folder.mkdir(parents=True, exist_ok=True)
+
+            if len(columns_list) == 1 and columns_list[0][1] == "single":
+                col, _ = columns_list[0]
+                feature_label = f"{feature_base}"
+                viz_single_feature_vs_importance_in_group(
+                    window_df,
+                    col,
+                    feature_folder,
+                    feature_label,
+                    importance_col=importance_col,
+                    sign_col="influence_sign",
+                )
+            else:
+                stat_order = ["min", "mean", "std", "max"]
+                columns_sorted = sorted(
+                    columns_list,
+                    key=lambda x: next(
+                        (i for i, s in enumerate(stat_order) if s == x[1]), 999
+                    ),
+                )
+                for col, stat in columns_sorted:
+                    if stat == "single":
+                        feature_label = feature_base
+                    else:
+                        feature_label = f"{feature_base} ({stat.upper()})"
+                    viz_single_feature_vs_importance_in_group(
+                        window_df,
+                        col,
+                        feature_folder,
+                        feature_label,
+                        importance_col=importance_col,
+                        sign_col="influence_sign",
+                    )
+
+        print(f"{window_base_folder} done")
+
 
 def main():
     args = parse_args()
@@ -1675,6 +2018,7 @@ def main():
     print(f"✓ Models: {features_df['model'].value_counts().to_dict()}\n")
 
     features_df = add_group_from_patch_key(features_df)
+    features_df = add_window_label_from_patch_meta(features_df)
 
     viz2_real_vs_generated_boxplots_with_influence(
         features_df,
@@ -1689,6 +2033,11 @@ def main():
     viz_most_influential_pos_neg_boxplots(
         features_df,
         base_output_folder=output_root
+    )
+
+    viz_feature_values_vs_importance_by_group(
+        features_df,
+        base_output_folder=output_root,
     )
 
 if __name__ == "__main__":
