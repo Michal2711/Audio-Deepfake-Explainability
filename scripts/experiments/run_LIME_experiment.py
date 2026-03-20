@@ -79,10 +79,9 @@ def main():
     ap.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     ap.add_argument(
         "--save-separated-audio",
-        nargs="?",
-        const=True,
-        default=None,
-        help="Save separated audio components (default: False). If set, only separated audio will be saved in output_dir/track_name/separated_components/"
+        choices=['none', 'separated', 'reversed'],
+        default='none',
+        help="Options: 'none' (default) - do not save separated audio, 'separated' - save separated components, 'reversed' - save reversed separated components (original minus separated)."
     )
     
     args = ap.parse_args()
@@ -186,7 +185,8 @@ def main():
             segmented_explanations=segmented_explanations,
             segment_duration=segment_duration,
             segmented_explanations_path=str(segmented_explanations_path),
-            save_separated_audio_only=args.save_separated_audio
+            save_separated_audio_only=args.save_separated_audio == 'separated',
+            save_reversed_separated_audio_only=args.save_separated_audio == 'reversed'
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Experiment interrupted (Ctrl+C)")

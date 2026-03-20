@@ -497,7 +497,8 @@ def run_lime_experiment_safe(
     segmented_explanations: bool = False,
     segment_duration: float = 10.0,
     segmented_explanations_path: Optional[str] = None,
-    save_separated_audio_only: Optional[bool] = None
+    save_separated_audio_only: Optional[bool] = None,
+    save_reversed_separated_audio_only: Optional[bool] = None
 ):
     """ 
     Run the LIME experiment for fake song detection.
@@ -534,7 +535,7 @@ def run_lime_experiment_safe(
         
         print(f"   Getting predictions for {len(all_audio)} files...")
 
-        if not save_separated_audio_only:
+        if not save_separated_audio_only and not save_reversed_separated_audio_only:
         
             original_probs = predict_batch_from_files(
                 predictor, 
@@ -550,7 +551,7 @@ def run_lime_experiment_safe(
         if explain:
             if full_track_explanations:
 
-                if save_separated_audio_only:
+                if save_separated_audio_only or save_reversed_separated_audio_only:
                     for fpath in all_audio:
                         y, _ = librosa.load(fpath, sr=44100, mono=True, offset=0, duration=model_time)
                         
@@ -568,11 +569,17 @@ def run_lime_experiment_safe(
                         for i, (name, separated_audio) in enumerate(zip(components_names, components)):
                             orig_filename = Path(fpath).stem
                             safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', orig_filename)
-                            separated_audio_path = Path(features_output_dir_full or "") / folder.name / safe_name / "separated_components" / f"{name}.wav"
-                            separated_audio_path.parent.mkdir(parents=True, exist_ok=True)
-                            sf.write(separated_audio_path, separated_audio, 44100)
-                            print(f"   Saved separated component audio: {separated_audio_path}")
-
+                            if save_separated_audio_only:
+                                separated_audio_path = Path(features_output_dir_full or "") / folder.name / safe_name / "separated_components" / f"{name}.wav"
+                                separated_audio_path.parent.mkdir(parents=True, exist_ok=True)
+                                sf.write(separated_audio_path, separated_audio, 44100)
+                                print(f"   Saved separated component audio: {separated_audio_path}")
+                            elif save_reversed_separated_audio_only:
+                                separated_audio = y - separated_audio
+                                separated_audio_path = Path(features_output_dir_full or "") / folder.name / safe_name / "reversed_separated_components" / f"{name}.wav"
+                                separated_audio_path.parent.mkdir(parents=True, exist_ok=True)
+                                sf.write(separated_audio_path, separated_audio, 44100)
+                                print(f"   Saved reversed separated component audio: {separated_audio_path}")
                     continue
 
                 folder_explanations = explain_predictions_separate(
@@ -648,7 +655,7 @@ def run_lime_experiment_safe(
                     if segmented_explanations_path:
                         append_update_explanations(merged_explanations, Path(segmented_explanations_path))
 
-    if save_separated_audio_only:
+    if save_separated_audio_only or save_reversed_separated_audio_only:
         print("\n✅ Experiment completed with separated audio saved. No explanations generated.")
         return None, None
 
