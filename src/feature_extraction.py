@@ -86,7 +86,7 @@ def extract_all_features(audio, sr, reference_audio=None):
     features['jitter'] = compute_jitter_extended(audio, sr, f0=f0)
     features['shimmer'] = compute_shimmer_extended(audio, sr)
     features['hnr'] = compute_hnr(audio, sr)
-    features['gne'] = compute_gne(audio, sr)
+    # features['gne'] = compute_gne(audio, sr)
 
     features['breath_count'] = detect_breaths(audio, sr)
     features['intonation_pattern'] = compute_intonation_pattern(audio, sr, f0=f0)
@@ -187,18 +187,18 @@ def compute_hnr(y, sr):
     hnr_db = 10 * np.log10(np.sum(harmonic ** 2) / (np.sum(noise ** 2) + 1e-8))
     return hnr_db
 
-def compute_gne(y, sr, frame_length=512, hop_length=160):
-    """
-    Glottal-to-Noise Excitation Ratio
-    """
-    harm = librosa.effects.harmonic(y)
-    S_harmonic = np.abs(librosa.stft(harm))
+# def compute_gne(y, sr, frame_length=512, hop_length=160):
+#     """
+#     Glottal-to-Noise Excitation Ratio
+#     """
+#     harm = librosa.effects.harmonic(y)
+#     S_harmonic = np.abs(librosa.stft(harm))
     
-    S_full = np.abs(librosa.stft(y))
-    S_noise = S_full - S_harmonic
+#     S_full = np.abs(librosa.stft(y))
+#     S_noise = S_full - S_harmonic
     
-    gne_db = 10 * np.log10(np.sum(S_harmonic**2 + 1e-8) / np.sum(S_noise**2 + 1e-8))
-    return gne_db
+#     gne_db = 10 * np.log10(np.sum(S_harmonic**2 + 1e-8) / np.sum(S_noise**2 + 1e-8))
+#     return gne_db
 
 def compute_shimmer(y, sr):
     frame_length = int(0.03 * sr)
