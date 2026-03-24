@@ -438,3 +438,181 @@ def plot_stacked_rms_area_components(
     outfile = Path(output_path) / f"{prefix}_stacked_rms_area_components.png"
     plt.savefig(outfile, bbox_inches='tight')
     plt.close()
+
+def plot_bar_influences_per_sample(
+    component_influences,
+    output_path,
+    prefix="",
+    component_order=None,
+    predicted_class="Unknown",
+    model_name="",
+    model_pred=0.0
+):
+    Path(output_path).mkdir(parents=True, exist_ok=True)
+
+    if component_order is None:
+        component_order = ['vocals0', 'drums0', 'bass0', 'other0']
+
+    influences_dict = {comp: component_influences.get(comp, 0.0) for comp in component_order}
+    influences_list = [influences_dict[comp] for comp in component_order]
+
+    plt.figure(figsize=(10, 6))
+    colors = ["red" if x < 0 else "green" for x in influences_list]
+    plt.bar(component_order, influences_list, color=colors, alpha=0.8, edgecolor='black')
+    plt.xlabel("Audio Components")
+    plt.ylabel("Influence on Model Decision")
+    title_prefix = f"{model_name}/" if model_name else ""
+    plt.title(
+        f"LIME Influences (Bar): {title_prefix}{prefix}\n"
+        f"Class: {predicted_class}, P(fake): {model_pred:.3f}"
+    )
+    plt.xticks(rotation=45)
+    plt.axhline(0, color='black', linewidth=1)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+
+    outfile = Path(output_path) / f"{prefix}_bar_influences.png"
+    plt.savefig(outfile, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Saved BAR: {outfile}")
+
+def plot_radar_influences_per_sample(
+    component_influences,
+    output_path,
+    prefix="",
+    component_order=None,
+    predicted_class="Unknown",
+    model_name=""
+):
+    Path(output_path).mkdir(parents=True, exist_ok=True)
+
+    if component_order is None:
+        component_order = ['vocals0', 'drums0', 'bass0', 'other0']
+
+    influences_dict = {comp: component_influences.get(comp, 0.0) for comp in component_order}
+    influences_list = [influences_dict[comp] for comp in component_order]
+
+    signs = ['+' if infl >= 0 else '−' for infl in influences_list]
+    colors = ['green' if s == '+' else 'red' for s in signs]
+    abs_values = [abs(infl) for infl in influences_list]
+
+    angles = np.linspace(0, 2 * np.pi, len(component_order), endpoint=False).tolist()
+    angles += angles[:1]
+    abs_values += abs_values[:1]
+
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+    
+    ax.set_rgrids([0.25, 0.5, 0.75, 1.0], angle=30, fontsize=10, alpha=0.7)
+    ax.set_ylim(0, 1.0)
+    ax.fill(angles, abs_values, color='skyblue', alpha=0.35)
+    ax.plot(angles, abs_values, color='navy', linewidth=4, marker='o', markersize=14)
+
+    ax.set_yticklabels([])
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(component_order, fontsize=14, weight='bold')
+
+    
+    from matplotlib.patheffects import withStroke
+    
+    for i, (angle, infl, sign) in enumerate(zip(angles[:-1], influences_list, signs)):
+        label_text = f'{sign}{abs(infl):.3f}'
+        
+        
+        r_distance = 1.45 + (abs(infl) * 0.1)
+        
+        ax.annotate(
+            label_text, 
+            xy=(angle, r_distance),
+            ha='center', va='center',
+            fontsize=8,
+            fontweight='bold', 
+            color=colors[i],
+            path_effects=[withStroke(foreground="white", linewidth=3)],
+            bbox=dict(boxstyle="round,pad=0.15", facecolor='white', alpha=0.95),
+            clip_on=False
+        )
+
+    # Legenda na dole
+    legend_elements = []
+    for i, comp in enumerate(component_order):
+        legend_elements.append(
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=colors[i], 
+                       markersize=12, label=f'{comp}: {signs[i]}{influences_list[i]:.3f}')
+        )
+    
+    ax.legend(handles=legend_elements, loc='upper center', 
+              bbox_to_anchor=(0.5, -0.08), ncol=2, fontsize=11, frameon=True, fancybox=True)
+
+    title_prefix = f"{model_name} / " if model_name else ""
+    ax.set_title(
+        f"LIME Component Influences (Radar Plot)\n"
+        f"{title_prefix}{prefix} | Class: {predicted_class}",
+        fontsize=16, pad=30, weight='bold', color='darkblue'
+    )
+    
+    plt.tight_layout()
+    outfile = Path(output_path) / f"{prefix}_radar_influences.png"
+    plt.savefig(outfile, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Saved RADAR: {outfile}")
+
+def visualize_per_sample_explanations(
+    explanations, 
+    features_outputdir_full="features_outputdir_full",
+    max_samples_per_model=10
+):
+    features_base = Path(features_outputdir_full)
+    COMPONENT_ORDER = ['vocals0', 'drums0', 'bass0', 'other0']
+    
+    print(f"🔍 Generating per-sample visualizations (BAR + RADAR) in: {features_base}")
+
+    sample_count = 0
+    for model_folder, samples in explanations.items():
+        model_name = _normalize_model_name(model_folder.lower())
+        if not model_name:
+            continue
+        
+        model_dir = features_base / model_folder
+        
+        for sample_id, sample_info in list(samples.items())[:max_samples_per_model]:
+            if sample_info.get("type") != "full_track":
+                continue
+            
+            explanations_data = sample_info.get("explanations", {})
+            comp_inf = explanations_data.get("component_influences", {})
+            predicted_class = explanations_data.get("predicted_class", "Unknown")
+            model_pred = explanations_data.get("model_prediction", 0.0)
+            
+            if not comp_inf or len(comp_inf) == 0:
+                print(f"⏭️ Skipped (no influences): {model_folder}/{sample_id}")
+                continue
+            
+            safename = sample_id 
+            sample_output_dir = model_dir / safename
+            sample_output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 1. BAR PLOT
+            plot_bar_influences_per_sample(
+                component_influences=comp_inf,
+                output_path=sample_output_dir,
+                prefix=safename,
+                component_order=COMPONENT_ORDER,
+                predicted_class=predicted_class,
+                model_name=model_name,
+                model_pred=model_pred,
+            )
+            
+            # 2. RADAR PLOT
+            plot_radar_influences_per_sample(
+                component_influences=comp_inf,
+                output_path=sample_output_dir,
+                prefix=safename,
+                component_order=COMPONENT_ORDER,
+                predicted_class=predicted_class,
+                model_name=model_name,
+            )
+            
+            sample_count += 1
+            print(f"✅ Saved BAR+RADAR: {model_folder}/{safename}/")
+    
+    print(f"✅ Offline visualizations for {sample_count} samples in: {features_base}")

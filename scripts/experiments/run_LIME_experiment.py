@@ -32,7 +32,8 @@ from lime_explainer import (
 )
 from lime_visualizations import (
     visualize_explanations,
-    visualize_explanations_by_model
+    visualize_explanations_by_model,
+    visualize_per_sample_explanations
 )
 from sonics_api import LocalSonnics, RemoteSonnics
 from lime_explainer import load_existing_explanations
@@ -83,8 +84,15 @@ def main():
         default='none',
         help="Options: 'none' (default) - do not save separated audio, 'separated' - save separated components, 'reversed' - save reversed separated components (original minus separated)."
     )
+    ap.add_argument(
+        "--save-visualizations-only",
+        action="store_true",
+        help="Run the experiment but only save visualizations, skipping explanations generation (useful if you already have explanations and just want to regenerate visualizations with new settings)."
+    )
     
     args = ap.parse_args()
+
+    save_visualizations_only = args.save_visualizations_only
 
     config = load_yaml(Path(args.config))
     
@@ -167,42 +175,51 @@ def main():
         
         print("✅ Remote API ready\n")
     
-    try:
-        df, explanations = run_lime_experiment_safe(
-            predictor=predictor,
-            model_time=model_cfg.get('model_time', 120),
-            explain=lime_cfg.get('explain', True),
-            max_samples_explain=lime_cfg.get('max_samples_explain', 5),
-            dataset_path=dataset_path,
-            num_samples_lime=num_samples_lime,
-            models_to_explain=lime_cfg.get('models_to_explain', []),
-            ids_to_explain=lime_cfg.get('ids_to_explain', list(range(10))),
-            checkpoint_dir=checkpoint_dir,
-            explanations_path=str(explanations_path),
-            features_output_dir_full=str(full_track_output_dir),
-            features_output_dir_segmented = str(segmented_output_dir),
-            full_track_explanations=full_track_explanations,
-            segmented_explanations=segmented_explanations,
-            segment_duration=segment_duration,
-            segmented_explanations_path=str(segmented_explanations_path),
-            save_separated_audio_only=args.save_separated_audio == 'separated',
-            save_reversed_separated_audio_only=args.save_separated_audio == 'reversed'
-        )
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Experiment interrupted (Ctrl+C)")
-        if checkpoint_dir:
-            print(f"💾 Progress saved in: {checkpoint_dir}")
-            print("💡 Resume with --resume flag")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n\n❌ Critical error: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    if not save_visualizations_only:
+        try:
+            df, explanations = run_lime_experiment_safe(
+                predictor=predictor,
+                model_time=model_cfg.get('model_time', 120),
+                explain=lime_cfg.get('explain', True),
+                max_samples_explain=lime_cfg.get('max_samples_explain', 5),
+                dataset_path=dataset_path,
+                num_samples_lime=num_samples_lime,
+                models_to_explain=lime_cfg.get('models_to_explain', []),
+                ids_to_explain=lime_cfg.get('ids_to_explain', list(range(10))),
+                checkpoint_dir=checkpoint_dir,
+                explanations_path=str(explanations_path),
+                features_output_dir_full=str(full_track_output_dir),
+                features_output_dir_segmented = str(segmented_output_dir),
+                full_track_explanations=full_track_explanations,
+                segmented_explanations=segmented_explanations,
+                segment_duration=segment_duration,
+                segmented_explanations_path=str(segmented_explanations_path),
+                save_separated_audio_only=args.save_separated_audio == 'separated',
+                save_reversed_separated_audio_only=args.save_separated_audio == 'reversed'
+            )
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Experiment interrupted (Ctrl+C)")
+            if checkpoint_dir:
+                print(f"💾 Progress saved in: {checkpoint_dir}")
+                print("💡 Resume with --resume flag")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\n\n❌ Critical error: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    else:
+        print("🔍 Loading existing explanations...")
+        explanations = load_existing_explanations(explanations_path)
+        if explanations:
+            print(f"✅ Loaded explanations from {explanations_path}")
+        else:
+            print(f"⚠️  No explanations found at {explanations_path}. Cannot generate visualizations.")
+            sys.exit(1)
     
     print("\n📊 Generating visualizations...")
 
-    if args.save_fbp_audio:
+    if args.save_separated_audio in ('separated', 'reversed'):
         print("\n✅ Experiment completed with separated audio saved. No explanations generated.")
         return
     
@@ -221,6 +238,11 @@ def main():
             print(f"✅ Per-model visualizations: {viz_path_per_model}")
         except Exception as e:
             print(f"⚠️  Error in per-model visualizations: {e}")
+
+    visualize_per_sample_explanations(
+        explanations=explanations,
+        features_outputdir_full= result_path / experiment_name / "full_track",
+    )
 
     print("\n" + "=" * 70)
     print("✅ Experiment completed successfully!")
