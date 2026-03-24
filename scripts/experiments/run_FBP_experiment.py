@@ -158,11 +158,9 @@ def main():
     )
     ap.add_argument(
         "--save-fbp-audio",
-        nargs="?",
-        const=True,
-        # action="store_true",
-        default=None,
-        help="Save WAV withou frequency band perturbations (default: False). If set, only perturbed audio will be saved in output_dir/track_name/perturbed.wav"
+        choices=['none', 'separated', 'reversed'],
+        default='none',
+        help="Save WAV with frequency band perturbations. Options: 'none' (default) - do not save, 'separated' - save separated bands, 'reversed' - save reversed separated bands (original minus separated)."
     )
 
     args = ap.parse_args()
@@ -252,7 +250,8 @@ def main():
         normalize_loudness=bool(explain_cfg.get("normalize_loudness", True)),
         lufs=float(explain_cfg.get("lufs", -14.0)), 
         checkpoint_dir=checkpoint_dir,
-        save_perturbed_audio_only=args.save_fbp_audio,
+        save_perturbed_audio_only=args.save_fbp_audio == 'separated',
+        save_reversed_perturbed_audio_only=args.save_fbp_audio == 'reversed'
     )
 
     try:

@@ -51,9 +51,11 @@ def main():
 
     sr = int(audio_cfg.get("samplerate", 44100))
     components = bands_cfg.get("components", ["mixture"])
+    version = bands_cfg.get("version", "separated")
     components = set(components)
 
     # dictionary where to save extracted features from FBP bands
+    result_root = result_root / "separated_bands" if version == "separated" else result_root / "reversed_separated_bands"
     output_root = result_root / experiment_name
     output_root.mkdir(parents=True, exist_ok=True)
     print("=" * 70)
@@ -92,6 +94,10 @@ def main():
                     continue
 
                 meta_path = component_dir / f"{track_stem}_bands_metadata.json"
+                separated_dir = component_dir / "separated_bands" if version == "separated" else component_dir / "reversed_separated_bands"
+                if not component_dir.exists():
+                    print(f"[WARN] Component directory not found: {component_dir}")
+                    continue
                 if not meta_path.exists():
                     print(f"[WARN] Missing meta json: {meta_path}")
                     continue
@@ -119,7 +125,7 @@ def main():
                     wav_name = (
                         f"{track_stem}__{component}__{int(low)}-{int(high)}Hz_{ptype}_{importance:+.3f}.wav"
                     )
-                    wav_path = component_dir / "freq_batches" / wav_name
+                    wav_path = separated_dir / "freq_batches" / wav_name
                     if not wav_path.exists():
                         print(f"[WARN] Missing wav file: {wav_path}")
                         continue

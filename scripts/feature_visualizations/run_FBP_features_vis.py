@@ -1401,11 +1401,17 @@ def main():
 
     data_cfg = config.get("data", {})
     output_cfg = config.get("output", {})
+    fbp_band_features_cfg = config.get("fbp_band_features", {})
+    band_version = fbp_band_features_cfg.get("version", "separated")
 
     data_root = Path(data_cfg.get("features_path"))
     result_root = Path(output_cfg.get("result_path"))
 
-    features_path = data_root / "fbp_band_features.json"
+    data_root = data_root / "separated_bands" if band_version == "separated" else data_root / "reversed_separated_bands"
+    features_path = data_root / "fbp_bands"  / "fbp_band_features.json"
+    
+    result_root = result_root / "separated_bands" if band_version == "separated" else result_root / "reversed_separated_bands"
+    
     output_root = result_root / "features_visualization"
     output_root.mkdir(parents=True, exist_ok=True)
 

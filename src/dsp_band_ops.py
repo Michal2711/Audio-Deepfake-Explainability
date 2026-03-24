@@ -328,6 +328,7 @@ class FrequencyBandPerturbation:
                  lufs: Optional[float] = None,
                  checkpoint_dir: Optional[str | Path] = None,
                  save_perturbed_audio_only: bool = False,
+                 save_reversed_perturbed_audio_only: bool = False
     ):
         self.predictor = predictor
         self.preset = preset
@@ -373,6 +374,7 @@ class FrequencyBandPerturbation:
             self.checkpoint = ExperimentCheckpoint(checkpoint_dir)
 
         self.save_perturbed_audio_only = save_perturbed_audio_only
+        self.save_reversed_perturbed_audio_only = save_reversed_perturbed_audio_only
 
     @timed("Computing spectrogram")
     def _compute_spectrogram(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:  
@@ -533,7 +535,7 @@ class FrequencyBandPerturbation:
         file_attempt: int = 0,
         max_file_retries: int = 3,
         retry_on_error: bool = True,
-        save_audio: bool = False,
+        # save_audio: bool = False,
         audio_root: Optional[Path] = None,
         file_name: Optional[str] = None
     ) -> Optional[FBDResult]:
@@ -603,6 +605,41 @@ class FrequencyBandPerturbation:
 
             delta = float(orig_prob - pert_prob)
 
+            if (self.save_perturbed_audio_only or self.save_reversed_perturbed_audio_only) and audio_root is not None:
+                comp_dir = audio_root / component_name
+                freq_batches_dir = comp_dir / "freq_batches"
+                if self.save_perturbed_audio_only:
+                    separated_dir = comp_dir / "separated_bands"
+                elif self.save_reversed_perturbed_audio_only:
+                    separated_dir = comp_dir / "reversed_separated_bands"
+                audio_dir = separated_dir / "freq_batches"
+                audio_dir.mkdir(parents=True, exist_ok=True)
+
+                if self.save_perturbed_audio_only:
+                    separated_mask = 1.0 - keep_band
+                    mag_separated = mag * separated_mask[:, None]
+                    S_sep = mag_separated * phase
+                    y_sep_save = self._invert_spectrogram(S_sep)
+
+                    if self.normalize_loudness:
+                        y_sep_save = match_rms(sig, y_sep_save)
+                elif self.save_reversed_perturbed_audio_only:
+                    y_sep_save = y_p  # save mix minus perturbed band (reversed)
+                    S_sep = S_p
+
+                if np.max(np.abs(y_sep_save)) > 0:
+                    y_out = y_sep_save / np.max(np.abs(y_sep_save)) * 0.99
+                else:
+                    y_out = y_sep_save
+
+                importance_type = "POSITIVE" if delta > 0 else "NEGATIVE" if delta < 0 else "NEUTRAL"
+
+                out_name = f"{file_name}__{component_name}__{int(low)}-{int(high)}Hz_{importance_type}_{delta:+.3f}.wav"
+                out_path = audio_dir / out_name
+                sf.write(str(out_path), y_out, self.sr)
+
+                self.visualize_orig_vs_masked_spectrogram(S, S_sep, file_name, separated_dir, component_name, low, high, delta)
+
             batch_importances.append(
                 {
                     "component": component_name,
@@ -615,22 +652,9 @@ class FrequencyBandPerturbation:
             band_mask = (freqs >= low) & (freqs <= high)
             importance_map[band_mask, :] += delta
 
-            if save_audio and audio_root is not None:
-                comp_dir = audio_root / component_name / "freq_batches"
-                comp_dir.mkdir(parents=True, exist_ok=True)
-
-                if np.max(np.abs(y_p)) > 0:
-                    y_out = y_p / np.max(np.abs(y_p)) * 0.99
-                else:
-                    y_out = y_p
-
-                importance_type = "POSITIVE" if delta > 0 else "NEGATIVE" if delta < 0 else "NEUTRAL"
-
-                out_name = f"{file_name}__{component_name}__{int(low)}-{int(high)}Hz_{importance_type}_{delta:+.3f}.wav"
-                out_path = comp_dir / out_name
-                sf.write(str(out_path), y_out, self.sr)
-
-                self.visualize_orig_vs_masked_spectrogram(S, S_p, file_name, comp_dir, component_name, low, high, delta)
+        if self.save_perturbed_audio_only or self.save_reversed_perturbed_audio_only:
+            print(f"\n[Audio saved only mode] Completed importance computation for {component_name} of {audio_path} without returning results.")
+            return None
 
         return FBDResult(
             importance_map=importance_map,
@@ -670,8 +694,8 @@ class FrequencyBandPerturbation:
                 audio_path=audio_path,
                 max_file_retries=max_file_retries,
                 retry_on_error=retry_on_error,
-                save_audio=self.save_perturbed_audio_only,
-                audio_root=track_output_dir if self.save_perturbed_audio_only else None,
+                # save_audio=self.save_perturbed_audio_only,
+                audio_root=track_output_dir if self.save_perturbed_audio_only or self.save_reversed_perturbed_audio_only else None,
                 file_name=file_name
             )
 
@@ -710,7 +734,7 @@ class FrequencyBandPerturbation:
 
         if self.checkpoint:
             processed = self.checkpoint.load_processed_files()
-            if str(audio_path) in processed:
+            if str(audio_path) in processed and not self.save_perturbed_audio_only and not self.save_reversed_perturbed_audio_only:
                 print(f"    ⏭️  Already processed, skipping...")
                 return None
         
@@ -734,6 +758,10 @@ class FrequencyBandPerturbation:
                     track_output_dir=track_output_dir,
                     file_name=file_name
                 )
+
+                if self.save_perturbed_audio_only or self.save_reversed_perturbed_audio_only:
+                    print(f"    💾 Saved perturbed audio for {audio_path} in {track_output_dir}")
+                    return None
 
                 if not result_list:
                     if self.checkpoint:
@@ -919,6 +947,10 @@ class FrequencyBandPerturbation:
                         max_file_retries=5
                     )
 
+                    if self.save_perturbed_audio_only or self.save_reversed_perturbed_audio_only:
+                        print(f"    [Audio saved only mode] Skipping result saving for {audio_file.name}")
+                        continue
+
                     if result:
                         results.append(result)
 
@@ -940,6 +972,10 @@ class FrequencyBandPerturbation:
                                 pd.DataFrame(results).to_csv(tmp_file, index=False)
                                 print(f"🔄 Auto-saved progress to {tmp_file}")
 
+            if self.save_perturbed_audio_only or self.save_reversed_perturbed_audio_only:
+                print(f"\n[Audio saved only mode] Experiment completed without computing final results.")
+                return pd.DataFrame()
+            
             if not results:
                 print("\n⚠️  No results to return!")
                 return pd.DataFrame()
@@ -1074,7 +1110,7 @@ class FrequencyBandPerturbation:
         Sdb_orig = librosa.amplitude_to_db(np.abs(S_orig), ref=np.max)
         Sdb_masked = librosa.amplitude_to_db(np.abs(S_masked), ref=np.max)
         
-        vis_dir = compdir.parent / 'batches_vis'
+        vis_dir = compdir / 'batches_vis'
         vis_dir.mkdir(parents=True, exist_ok=True)
         
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
