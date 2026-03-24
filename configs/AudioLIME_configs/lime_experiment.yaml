@@ -28,11 +28,11 @@ lime:
   max_samples_explain: 10
   num_samples_lime: 500 # Number of samples for LIME (500-1000 for better quality)
   models_to_explain:
-    # - UDIO
-    # - SUNO
-    # - SUNO_PRO
+    - UDIO
+    - SUNO
+    - SUNO_PRO
     - REAL
-    # - ElevenLabs
+    - ElevenLabs
   ids_to_explain:
     - 0
     - 1
