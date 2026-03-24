@@ -1257,11 +1257,17 @@ def main():
 
     data_cfg = config.get("data", {})
     output_cfg = config.get("output", {})
+    lime_comp_features_cfg = config.get("lime_comp_features", {})
+    comp_version = lime_comp_features_cfg.get("version", "separated")
 
     data_root = Path(data_cfg.get("features_path"))
     result_root = Path(output_cfg.get("result_path"))
 
-    features_path = data_root / "audiolime_component_features.json"
+    data_root = data_root / "separated_components" if comp_version == "separated" else data_root / "reversed_separated_components"
+    features_path = data_root / "lime_components" / "audiolime_component_features.json"
+
+    result_root = result_root / "separated_components" if comp_version == "separated" else result_root / "reversed_separated_components"
+
     output_root = result_root / "features_visualization"
     output_root.mkdir(parents=True, exist_ok=True)
 

@@ -52,9 +52,11 @@ def main():
 
     sr = int(audio_cfg.get("samplerate", 44100))
     components = components_cfg.get("components", ["mixture"])
+    version = components_cfg.get("version", "separated")
     components = set(components)
 
-    output_root = result_root / experiment_name
+    output_root = result_root / "separated_components" if version == "separated" else result_root / "reversed_separated_components"
+    # output_root = result_root / experiment_name
     output_root.mkdir(parents=True, exist_ok=True)
     print("=" * 70)
     print("AudioLIME Component Features Extraction")
@@ -91,7 +93,7 @@ def main():
             track_stem = Path(track_dir.name).stem
             safe_track_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', track_stem)
 
-            components_dir = track_dir / "separated_components"
+            components_dir = track_dir / "separated_components" if version == "separated" else track_dir / "reversed_separated_components"
             if not components_dir.exists():
                 print(f"[WARN] Components directory not found: {components_dir}")
                 continue

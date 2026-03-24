@@ -19,6 +19,7 @@ from audioLIME.lime_audio import LimeAudioExplainer
 from lime_visualizations import (
     plot_waveforms_overlay_with_influences,
     plot_stacked_rms_area_components,
+    visualize_per_sample_explanations
 )
 
 from sonics_api import predict_batch_from_files
@@ -331,15 +332,15 @@ def explain_predictions_separate(
     
     sample_info = {}
 
-    if features_output_dir:
-        features_path = Path(features_output_dir) / folder_name / "features.json"
+    # if features_output_dir:
+    #     features_path = Path(features_output_dir) / folder_name / "features.json"
     
-        if features_path.exists():
-            try:
-                with open(features_path, 'r', encoding='utf-8') as f:
-                    features_all_tracks = json.load(f)
-            except Exception:
-                print(f"⚠️ Warning: Could not load existing physical features from {features_path}")
+    #     if features_path.exists():
+    #         try:
+    #             with open(features_path, 'r', encoding='utf-8') as f:
+    #                 features_all_tracks = json.load(f)
+    #         except Exception:
+    #             print(f"⚠️ Warning: Could not load existing physical features from {features_path}")
 
     if explanations_path:
         explanations_path_obj  = Path(explanations_path)
