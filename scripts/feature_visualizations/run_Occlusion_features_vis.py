@@ -195,10 +195,6 @@ def load_and_prepare_data_full(json_file):
     return features_df, feature_cols
 
 def format_influence_statistics_box(labels, plot_data):
-    """
-    labels: labels on X axis, e.g. ['REAL\\nnegative', 'REAL\\npositive', ...]
-    plot_data: list of 1D arrays (as in boxplot)
-    """
     rows = []
 
     header = ["Group", "Mean", "Std", "Count"]
@@ -298,26 +294,19 @@ def add_group_from_patch_key(features_df):
     return df
 
 def add_window_label_from_patch_meta(features_df):
-    """
-    Z (starttimesec, endtimesec, fstart, fend) tworzy etykietę okna spektrogramu,
-    np. '0-6s_0-512Mel', '6-12s_512-1024Mel'.
-    """
     df = features_df.copy()
 
-    # sprawdź, czy mamy potrzebne kolumny
     required_cols = ["tstart", "tend", "fstart", "fend"]
     for col in required_cols:
         if col not in df.columns:
             print(f"Warning: Column '{col}' not found, skipping window labels.")
             return df
 
-    # zaokrąglenie do 1 miejsca po przecinku
     df["t_start"] = df["tstart"].round(1)
     df["t_end"] = df["tend"].round(1)
     df["f_start"] = df["fstart"].round(0).astype(int)
     df["f_end"] = df["fend"].round(0).astype(int)
 
-    # etykieta okna: "t_start-t_end s_f_start-f_end Mel"
     df["window_label"] = (
         df["t_start"].astype(str)
         + "-"
@@ -1695,11 +1684,6 @@ def viz_single_feature_vs_importance_in_group(
     importance_col="importance",
     sign_col="influence_sign",
 ):
-    """
-    Dla jednej grupy patchy (np. 'mostinfluential', 'best', 'worst')
-    i jednej cechy rysuje kilka paneli obok siebie: osobny panel per model,
-    wykres scatter: feature_value vs importance.
-    """
     required_cols = [feature_col, importance_col, "model", sign_col]
     for col in required_cols:
         if col not in group_df.columns:
@@ -1735,7 +1719,6 @@ def viz_single_feature_vs_importance_in_group(
         positive_df = model_df[model_df[sign_col] == "positive"]
         negative_df = model_df[model_df[sign_col] == "negative"]
 
-        # dodatnie wpływy – pełne kółka
         if not positive_df.empty:
             ax.scatter(
                 positive_df[feature_col],
@@ -1749,7 +1732,6 @@ def viz_single_feature_vs_importance_in_group(
                 label="positive",
             )
 
-        # ujemne wpływy – wyraźne X
         if not negative_df.empty:
             ax.scatter(
                 negative_df[feature_col],
@@ -1807,16 +1789,13 @@ def viz_single_feature_vs_importance_in_group(
             ),
         )
 
-    # wspólne etykiety osi
     fig.supxlabel(feature_label, fontsize=13, fontweight="bold")
     fig.supylabel("Patch importance", fontsize=13, fontweight="bold")
 
-    # czytelne ticki X
     for ax in axes:
         ax.tick_params(axis="x", labelrotation=45, labelsize=10)
         ax.xaxis.set_tick_params(labelbottom=True)
 
-    # wspólna legenda dla znaków
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D(
@@ -1872,10 +1851,6 @@ def viz_feature_values_vs_importance_by_group(
     importance_col="importance",
     window_col="window_label",
 ):
-    """
-    For each group of patches (group) and each feature,
-    draws plots: feature_value vs patch importance, split by models.
-    """
     setup_professional_style()
     df = features_df.copy()
 

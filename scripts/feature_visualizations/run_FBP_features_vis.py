@@ -193,10 +193,6 @@ def load_and_prepare_data_full(json_file):
     return features_df, feature_cols
 
 def format_influence_statistics_box(labels, plot_data):
-    """
-    labels: labels on X axis, e.g. ['REAL\\nnegative', 'REAL\\npositive', ...]
-    plot_data: list of 1D arrays (as in boxplot)
-    """
     rows = []
 
     header = ["Component", "Mean", "Std", "Count"]
@@ -1099,11 +1095,6 @@ def viz_single_feature_vs_importance_in_freq_band(
     importance_col="importance",
     sign_col="influence_sign",
 ):
-    """
-    Dla jednego pasma częstotliwości (freq_band) i jednej cechy
-    rysuje kilka paneli obok siebie: osobny panel per model,
-    wykres scatter: feature_value vs importance.
-    """
     required_cols = [feature_col, importance_col, "model", sign_col]
     for col in required_cols:
         if col not in band_df.columns:
@@ -1137,7 +1128,6 @@ def viz_single_feature_vs_importance_in_freq_band(
         positive_df = model_df[model_df[sign_col] == "positive"]
         negative_df = model_df[model_df[sign_col] == "negative"]
 
-        # dodatnie wpływy – pełne kółka
         if not positive_df.empty:
             ax.scatter(
                 positive_df[feature_col],
@@ -1151,7 +1141,6 @@ def viz_single_feature_vs_importance_in_freq_band(
                 label="positive",
             )
 
-        # ujemne wpływy – wyraźne X
         if not negative_df.empty:
             ax.scatter(
                 negative_df[feature_col],
@@ -1209,16 +1198,13 @@ def viz_single_feature_vs_importance_in_freq_band(
             ),
         )
 
-    # wspólne etykiety osi
     fig.supxlabel(feature_label, fontsize=13, fontweight="bold")
     fig.supylabel("Band importance", fontsize=13, fontweight="bold")
 
-    # czytelne ticki X
     for ax in axes:
         ax.tick_params(axis="x", labelrotation=45, labelsize=10)
         ax.xaxis.set_tick_params(labelbottom=True)
 
-    # wspólna legenda dla znaków
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D(
@@ -1274,9 +1260,6 @@ def viz_feature_values_vs_importance_by_freq_band(
     freq_band_col="freq_band",
     band_type_col="band_type",
 ):
-    """
-    For each frequency band (freq_band) and each feature, draws plots: feature_value vs band importance, split by models.
-    """
     setup_professional_style()
 
     df = features_df.copy()
