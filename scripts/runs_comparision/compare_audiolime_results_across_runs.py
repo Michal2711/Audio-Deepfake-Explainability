@@ -162,7 +162,7 @@ def load_audio_lime_explanations(file_paths: Sequence[str]) -> pd.DataFrame:
     
     return df_common, runs_labels.strip('_')
 
-def plot_audio_lime_influences(df_common: pd.DataFrame, output_dir: Path = None):
+def plot_audio_lime_influences(df_common: pd.DataFrame, output_dir: Path = None, save_combined: bool = True):
     sns.set_theme(style="whitegrid")
     
     providers = sorted(df_common["data_source"].unique())
@@ -175,6 +175,10 @@ def plot_audio_lime_influences(df_common: pd.DataFrame, output_dir: Path = None)
         dprov = df_common[df_common["data_source"] == prov].copy()
         if dprov.empty:
             continue
+        
+        tracks = sorted(dprov["file_name"].unique(), key=lambda x: try_num(x))
+        idx_pos = {t: i for i, t in enumerate(tracks)}
+        dprov["file_index"] = dprov["file_name"].map(idx_pos)
         
         comps = [c for c in components_order if c in dprov["component"].unique()]
         if not comps:
@@ -191,10 +195,45 @@ def plot_audio_lime_influences(df_common: pd.DataFrame, output_dir: Path = None)
             palette='husl'
         )
         g.map_dataframe(sns.lineplot, x="file_index", y="value")
-        g.add_legend(title="Run")
         g.set_axis_labels("file index", "influence")
         g.set_titles(col_template="{col_name}")
-        g.fig.suptitle(f"{prov}: AudioLIME influence vs file index ({legend_runs})", y=1.05, fontsize=12)
+        
+        short_labels = [t[:18] + "..." if len(t) > 18 else t for t in tracks]
+        index_text = "\n".join(f"{i:2d}: {lab}" for i, lab in enumerate(short_labels))
+
+        handles, labels = g.axes.flat[0].get_legend_handles_labels()
+        g.fig.legend(
+            handles,
+            labels,
+            title="Run",
+            loc="upper left",
+            bbox_to_anchor=(0.82, 0.85),
+            frameon=True,
+            fancybox=True,
+            shadow=False,
+            fontsize=10,
+        )
+
+        g.fig.text(
+            0.82,
+            0.45,
+            f"File Mapping:\n{index_text}",
+            fontsize=8.8,
+            va="top",
+            ha="left",
+            bbox=dict(
+                facecolor="white",
+                edgecolor="#d1d5db",
+                boxstyle="round,pad=0.4",
+                alpha=0.95,
+            ),
+        )
+
+        g.fig.subplots_adjust(right=0.78)
+        plt.subplots_adjust(bottom=0.05)
+        
+        g.fig.suptitle(f"{prov}: AudioLIME influence vs file index ({legend_runs})", 
+                    y=1.02, fontsize=12)
         
         if output_dir:
             outfile = output_dir / f"{prov}_audiolime_influences.png"
@@ -202,6 +241,78 @@ def plot_audio_lime_influences(df_common: pd.DataFrame, output_dir: Path = None)
             print(f"💾 Saved: {outfile}")
         
         plt.close()
+
+    if save_combined:
+        max_comps = 0
+        prov_comps = {}
+        for prov in providers:
+            dprov = df_common[df_common["data_source"] == prov]
+            comps = [c for c in components_order if c in dprov["component"].unique()]
+            if comps:
+                prov_comps[prov] = comps
+                max_comps = max(max_comps, len(comps))
+        
+        if max_comps == 0:
+            return
+        
+        fig, axes = plt.subplots(
+            nrows=len(prov_comps),
+            ncols=max_comps,
+            figsize=(4 * max_comps, 3 * len(prov_comps)),
+            sharey=False
+        )
+        
+        if len(prov_comps) == 1:
+            axes = np.array([axes])
+        if max_comps == 1:
+            axes = axes.reshape(len(prov_comps), 1)
+        
+        for row_idx, (prov, comps) in enumerate(prov_comps.items()):
+            dprov = df_common[df_common["data_source"] == prov].copy()
+            dprov = dprov[dprov["component"].isin(comps)]
+            
+            for col_idx in range(max_comps):
+                ax = axes[row_idx, col_idx]
+                if col_idx < len(comps):
+                    comp = comps[col_idx]
+                    dcomp = dprov[dprov["component"] == comp]
+                    sns.lineplot(
+                        data=dcomp,
+                        x="file_index",
+                        y="value",
+                        hue="run",
+                        palette='husl',
+                        ax=ax
+                    )
+                    ax.set_title(f"{prov} - {comp}")
+                    ax.set_xlabel("file index")
+                    ax.set_ylabel("influence")
+                    if row_idx == 0 and col_idx == 0:
+                        ax.legend(title="Run")
+                    else:
+                        ax.legend_.remove()
+                else:
+                    ax.axis("off")
+
+        
+        
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc='center left', bbox_to_anchor=(0.93, 0.475), 
+                title="Run", fontsize=18, title_fontsize=20, frameon=True,
+                ncol=1)
+
+        for row_idx in range(len(prov_comps)):
+            for col_idx in range(max_comps):
+                if axes[row_idx, col_idx].get_legend():
+                    axes[row_idx, col_idx].get_legend().remove()
+
+        fig.suptitle(f"AudioLIME influence vs file index ({legend_runs})", fontsize=12, y=0.95)
+        fig.tight_layout(rect=[0, 0, 0.94, 0.95])
+        
+        combined_path = output_dir / "ALL_models_audiolime_influences.png"
+        fig.savefig(combined_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"💾 Saved combined figure: {combined_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="AudioLIME runs results comparison - FacetGrid style")
@@ -217,7 +328,7 @@ def main():
     output_dir = Path(output_cfg.get('result_path', 'results/AudioLIME/Runs_comparison')) / runs_labels
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    plot_audio_lime_influences(df_common, output_dir)
+    plot_audio_lime_influences(df_common, output_dir, save_combined=True)
     print(f"✅ All plots saved to {output_dir}")
 
 if __name__ == "__main__":
