@@ -291,7 +291,7 @@ def run_features_extraction(
             if not folder_features_str_keys:
                 continue
 
-            append_update_features({folder.name: folder_features_str_keys}, Path(features_output_dir_full / "features_full_track.json"))
+            append_update_features({folder.name: folder_features_str_keys}, Path(features_output_dir_full / "features.json"))
 
         if segmented_features:
             merged_segmented_features[folder.name] = {}
@@ -334,5 +334,5 @@ def run_features_extraction(
                         }
                     }
 
-                append_update_features(merged_segmented_features, Path(features_output_dir_segmented / "segmented_features.json"))
+                append_update_features(merged_segmented_features, Path(features_output_dir_segmented / "features.json"))
 
