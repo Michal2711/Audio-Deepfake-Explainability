@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
+import re
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,12 @@ OUTCOME_COLORS = {
     "FP": "#ff7f0e",
     "FN": "#d62728",
 }
+
+def try_num(s):
+    if isinstance(s, bytes):
+        s = s.decode('utf-8', errors='ignore')
+    match = re.match(r'^(\d+)', s)
+    return int(match.group(1)) if match else 999999
 
 
 def setup_professional_style():
@@ -413,6 +420,179 @@ def add_bottom_stats_panel(fig, anchor_ax, text, width_frac=0.38, y_margin=0.04)
     )
 
     return stats_ax
+
+def plot_predictions_and_features_by_model_line_all(df_features: pd.DataFrame, output_dir: Path):
+    """Wykres liniowy: predykcje (góra) + cechy (dół), posortowane po indeksach."""
+    setup_professional_style()
+    sns.set_theme(style='whitegrid')
+    outputdir = output_dir / 'predictions_and_features_line'
+    outputdir.mkdir(parents=True, exist_ok=True)
+    feature_groups = build_feature_groups(df_features)
+    
+    # Rzeczywiste kolumny cech (bez predykcji/outcome)
+    feature_cols = [c for c in df_features.columns if pd.api.types.is_numeric_dtype(df_features[c]) and 
+                    c not in ['model', 'track_id', 'track_stem', 'data_type', 'prediction_score', 
+                              'pred_label', 'true_label', 'is_correct', 'outcome']]
+    
+    print(f"Available feature columns: {feature_cols[:10]}...")  # Debug
+    
+    models = sorted(df_features['model'].dropna().unique())
+    
+    for model in models:
+        model_dir = outputdir / model.replace(' ', '_')
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        model_files = sorted(df_features[df_features['model'] == model]['track_stem'].dropna().unique(), key=try_num)
+        file_idx_map = {f: i for i, f in enumerate(model_files)}
+        
+        df_model = df_features[df_features['model'] == model].copy()
+        df_model['file_index'] = df_model['track_stem'].map(file_idx_map)
+        
+        # Predykcje (wspólne dla wszystkich cech tego modelu)
+        d_pred = df_model[['file_index', 'prediction_score']].dropna()
+        if d_pred.empty:
+            print(f"No predictions for model {model}")
+            continue
+        d_pred = d_pred.sort_values('file_index').reset_index(drop=True)
+        d_pred = d_pred.set_index('file_index').reindex(range(len(model_files)), method='ffill').reset_index()
+        d_pred = d_pred.rename(columns={'index': 'file_index'})
+
+        for feature_base, column_line in sorted(feature_groups.items()):
+            feature_base = model_dir / feature_base
+            feature_base.mkdir(parents=True, exist_ok=True)
+
+            stat_order = ["min", "mean", "std", "max"]
+            colums_sorted = sorted(
+                column_line,
+                key=lambda x: next(
+                    (i for i, stat in enumerate(stat_order) if stat == x[1]), 999
+                ),
+            )
+
+            # Pętla po RZECZYWISTYCH kolumnach cech
+            for col, stat in colums_sorted:
+                if col not in df_model.columns:
+                    continue
+                    
+                d_col = df_model[['file_index', col]].dropna()
+                if d_col.empty:
+                    continue
+                
+                d_col = d_col.sort_values('file_index').reset_index(drop=True)
+                d_col = d_col.set_index('file_index').reindex(range(len(model_files)), method='ffill').reset_index()
+                d_col = d_col.rename(columns={'index': 'file_index'})
+                
+                # Wykres z 2 subplotami
+                fig, (ax_top, ax_bottom) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+                
+                # GÓRA: predykcje
+                ax_top.plot(range(len(model_files)), d_pred['prediction_score'], 'o-', linewidth=3, 
+                        markersize=7, color='darkred', alpha=0.9, label='Prediction Score')
+                ax_top.set_ylabel('Prediction Score\n(P > 0.5 = Fake)', fontsize=12, fontweight='bold')
+                ax_top.axhline(y=0.5, color='black', linestyle='-', linewidth=2, alpha=0.8)
+                ax_top.grid(True, alpha=0.3, linestyle='--')
+                ax_top.legend(loc='upper right')
+                
+                # DÓŁ: cecha
+                ax_bottom.plot(range(len(model_files)), d_col[col], 'o-', linewidth=3, markersize=7, 
+                            color='steelblue', alpha=0.8, label=col.replace('_', ' ').title())
+                ax_bottom.set_xlabel('File Index (sorted by name)')
+                ax_bottom.set_ylabel('Feature Value', fontsize=12, fontweight='bold')
+                ax_bottom.grid(True, alpha=0.3, linestyle='--')
+                ax_bottom.legend(loc='upper right')
+                
+                ax_bottom.set_title(f'{model}: {col.replace("_", " ").title()} vs Predictions', fontsize=13, pad=20)
+                
+                # Mapa plików
+                short_labels = [f"{i:2d}: {f[:20]}..." if len(f) > 20 else f"{i:2d}: {f}" 
+                            for i, f in enumerate(model_files)]
+                fig.text(0.92, 0.5, 'File Mapping:\n' + '\n'.join(short_labels), 
+                        fontsize=13, va='center', ha='left',
+                        bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3', alpha=0.95))
+                
+                # Zapis
+                safe_col = re.sub(r'[^a-zA-Z0-9_]', '_', col)
+                outfile = feature_base / f"{safe_col}_with_predictions.png"
+                plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close()
+                
+                print(f"Saved: {model}/{safe_col}_with_predictions.png")
+
+def plot_features_by_model_line_all(df_features: pd.DataFrame, output_dir: Path):
+    """Wizualizacja cech fizycznych per model dla WSZYSTKICH plików - styl AudioLIME/FBP"""
+    setup_professional_style()
+    sns.set_theme(style="whitegrid")
+
+    output_dir = output_dir / "lineplots_by_model_all_files"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    feature_groups = build_feature_groups(df_features)
+    feature_cols = [c for c in df_features.columns 
+                   if pd.api.types.is_numeric_dtype(df_features[c]) and 
+                   c not in ['model', 'track_id', 'track_stem', 'data_type', 'prediction_score', 'is_correct']]
+    
+    for model in sorted(df_features['model'].dropna().unique()):
+        model_dir = output_dir / model.replace(' ', '_')
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        # PLIKI TYLKO DLA TEGO MODELU
+        model_files = sorted(df_features[df_features['model'] == model]['track_stem'].dropna().unique(), key=try_num)
+        file_idx_map = {f: i for i, f in enumerate(model_files)}
+        
+        # File index per model
+        df_model = df_features[df_features['model'] == model].copy()
+        df_model['file_index'] = df_model['track_stem'].map(file_idx_map)
+        
+        for feature_base, column_list in sorted(feature_groups.items()):
+            feature_base = model_dir / feature_base
+            feature_base.mkdir(parents=True, exist_ok=True)
+
+            stat_order = ["min", "mean", "std", "max"]
+            colums_sorted = sorted(
+                column_list,
+                key=lambda x: next(
+                    (i for i, stat in enumerate(stat_order) if stat == x[1]), 999
+                ),
+            )
+            
+            for col, stat in colums_sorted:
+                # stat_label = stat.upper() if stat != "single" else col
+                dcol = df_model[['file_index', col]].dropna()
+                if dcol.empty:
+                    continue
+                
+                # SORTUJ + UZUPEŁNIJ BRAKIUJĄCE INDEKSY
+                dcol = dcol.sort_values('file_index').reset_index(drop=True)
+                dcol = dcol.set_index('file_index').reindex(range(len(model_files)), method='ffill').reset_index()
+                dcol = dcol.rename(columns={'index': 'file_index'})
+                
+                fig, ax = plt.subplots(figsize=(12, 6))
+                
+                # Plot z CIĘCIYMI DANYMI (bez zawijasów)
+                ax.plot(range(len(model_files)), dcol[col], 'o-', linewidth=2.5, markersize=6, alpha=0.8, color='steelblue')
+                
+                ax.set_xlabel("File index")
+                ax.set_ylabel(col.replace('_', ' ').title())
+                ax.set_title(f"{model}: {col.replace('_', ' ').title()}", fontsize=13)
+                ax.set_xticks(range(len(model_files)))  # pełne 0-N
+                ax.grid(True, alpha=0.3, linestyle='--')
+                
+                # File Mapping (pełne)
+                short_labels = [f[:18] + "..." if len(f) > 18 else f for f in model_files]
+                index_text = "\n".join(f"{i:2d}: {lab}" for i, lab in enumerate(short_labels))
+                fig.text(1.01, 0.5, f"File Mapping ({model}):\n{index_text}",
+                        fontsize=8.8, va="center", ha="left",
+                        bbox=dict(facecolor="white", edgecolor="#d1d5db", boxstyle="round,pad=0.4", alpha=0.95))
+                
+                plt.subplots_adjust(right=0.78, bottom=0.15)
+                fig.tight_layout()
+                
+                safe_feature = re.sub(r'[^a-zA-Z0-9_]', '_', col)[:40]
+                outfile = feature_base / f"{safe_feature}_by_file_line.png"
+                plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close()
+                print(f"💾 {model}/{col}")
+    
+    print(f"✅ Features by model saved to {output_dir}")
 
 def viz_features_by_model_and_global(df, output_root: Path):
     setup_professional_style()
@@ -1171,16 +1351,22 @@ def main():
     merged_df = merge_features_and_predictions(features_df, preds_df)
 
     # Feature distribution per model + REAL vs GENERATED
-    viz_features_by_model_and_global(merged_df, output_root)
+    # viz_features_by_model_and_global(merged_df, output_root)
 
-    # Correct vs incorrect classifications distribution
-    viz_features_correct_vs_incorrect(merged_df, output_root)
+    # # Correct vs incorrect classifications distribution
+    # viz_features_correct_vs_incorrect(merged_df, output_root)
 
-    # Features for TP / FP / TN / FN
-    viz_features_by_confusion_outcome(merged_df, output_root)
+    # # Features for TP / FP / TN / FN
+    # viz_features_by_confusion_outcome(merged_df, output_root)
 
-    # Scatter plots: feature value vs prediction score, colored by confidence
-    viz_features_vs_prediction_scatter(merged_df, output_root, confidence_threshold=0.3)
+    # # Scatter plots: feature value vs prediction score, colored by confidence
+    # viz_features_vs_prediction_scatter(merged_df, output_root, confidence_threshold=0.3)
+
+    # plot_features_by_model_line_all(merged_df, output_root)
+
+    plot_predictions_and_features_by_model_line_all(merged_df, output_root)
 
 if __name__ == "__main__":
     main()
+
+# ['model', 'track_id', 'track_stem', 'data_type', 'duration', 'rms_wave_min', 'rms_wave_mean', 'rms_wave_std', 'rms_wave_max', 'rms_spec_min', 'rms_spec_mean', 'rms_spec_std', 'rms_spec_max', 'zero_crossing_rate', 'spectral_centroid_min']

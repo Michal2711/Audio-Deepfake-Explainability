@@ -1,4 +1,5 @@
 import json
+import re
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -35,6 +36,12 @@ SIGN_COLORS = {
     'negative': '#d62728'
 }
 
+def try_num(s):
+    if isinstance(s, bytes):
+        s = s.decode('utf-8', errors='ignore')
+    match = re.match(r'^(\d+)', s)
+    return int(match.group(1)) if match else 999999
+
 def load_yaml(path: Path):
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
@@ -49,6 +56,14 @@ def parse_args():
         help="Path to the YAML configuration file."
     )
     return ap.parse_args()
+
+def safe_reindex_fill(df, index_col, target_idx):
+    """Bezpieczne reindex + ffill bez ostrzeżeń."""
+    df_sorted = df.sort_values(index_col)
+    df_reidx = df_sorted.set_index(index_col).reindex(target_idx, method='ffill')
+    df_final = df_reidx.ffill().reset_index()
+    df_final.rename(columns={'index': index_col}, inplace=True)
+    return df_final
 
 def flatten_feature(feat_dict, prefix=''):
                     result = {}
@@ -182,6 +197,42 @@ def load_and_prepare_data_full(json_file):
     
     return features_df, feature_cols
 
+def load_audiolime_explanations(json_path: Path) -> pd.DataFrame:
+    """Rozduplikowane dla każdego komponentu, kolumna 'component_name'."""
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    rows = []
+    components = ['vocals0', 'drums0', 'bass0', 'other0']
+    
+    for model_name, tracks_dict in data.items():
+        for track_key, track_data in tracks_dict.items():
+            if not isinstance(track_data, dict):
+                continue
+                
+            expl = track_data.get("explanations", {})
+            comp_inf = expl.get("component_influences", {})
+            track_id = track_data.get("track_id")
+            
+            pred_score = float(expl.get("model_prediction", float("nan")))
+            
+            # Rozduplikuj dla każdego komponentu
+            for comp_name in components:
+                rows.append({
+                    "model": model_name,
+                    "track": track_key,      # Nazwa utworu z JSON klucza
+                    "track_id": track_id,
+                    "component_name": comp_name,  # Dopasowane do features_df
+                    "prediction_score": pred_score,
+                    "predicted_class": expl.get("predicted_class"),
+                    f"{comp_name}_influence": float(comp_inf.get(comp_name, float("nan"))),
+                })
+    
+    lime_df = pd.DataFrame(rows)
+    print(f"AudioLIME explanations: {len(lime_df)} rows")
+    print("Lime columns:", lime_df.columns.tolist())
+    return lime_df
+
 def format_influence_statistics_box(labels, plot_data):
     """
     labels: labels on X axis, e.g. ['REAL\\nnegative', 'REAL\\npositive', ...]
@@ -290,6 +341,235 @@ def setup_professional_style():
     plt.rcParams['ytick.major.width'] = 1.5
     
     sns.set_palette("husl")
+
+def plot_audiolime_predictions_influence_features(features_df: pd.DataFrame, lime_json_path: Path, outputdir: Path):
+    """
+    3 rzędy wykresów per model+komponent:
+    1. Predykcje modelu (wspólne)
+    2. Wpływ LIME komponentu (vocals0/drum0/bass0/other0)
+    3. Cecha fizyczna Z TEGO KOMPONENTU
+    """
+    setup_professional_style()
+    sns.set_theme(style='whitegrid')
+    
+    lime_df = load_audiolime_explanations(lime_json_path)
+    
+    # Merge po model+track+component (1:1 dopasowanie)
+    full_df = pd.merge(
+        features_df, 
+        lime_df, 
+        on=["model", "track", "component_name"],  # Dokładnie jak w features_df
+        how="inner"
+    )
+    
+    print(f"✅ Merged AudioLIME full_df: {len(full_df)} rows")
+    print("Sample columns:", full_df[['model', 'track', 'component_name', 'prediction_score', 'vocals0_influence', 'rms_wave_mean']].head(2).to_string())
+    
+    outputdir = outputdir / 'audiolime_3rows_per_component'
+    outputdir.mkdir(parents=True, exist_ok=True)
+    
+    # Filtruj tylko numeryczne cechy fizyczne
+    exclude_cols = ['model', 'track', 'track_id', 'datatype', 'component_name', 'component_type', 
+                    'prediction_score', 'predicted_class', 'vocals0_influence', 'drums0_influence', 
+                    'bass0_influence', 'other0_influence', 
+                    'abs_importance', 'importance'
+        ]
+    feature_cols = [c for c in full_df.columns if pd.api.types.is_numeric_dtype(full_df[c]) and c not in exclude_cols]
+    
+    print(f"Feature columns ({len(feature_cols)}): {feature_cols[:10]}...")
+    
+    # Grupuj po model+component
+    components = ['vocals0', 'drums0', 'bass0', 'other0']
+    models = full_df['model'].unique()
+    
+    for model in sorted(models):
+        model_dir = outputdir / model.replace(' ', '_')
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        for comp in components:
+            comp_dir = model_dir / comp
+            comp_dir.mkdir(parents=True, exist_ok=True)
+            comp_df = full_df[(full_df['model'] == model) & (full_df['component_name'] == comp)]
+            if len(comp_df) == 0:
+                print(f"⚠️ Skip {model}/{comp}: brak danych")
+                continue
+            
+            # file_index = indeks w ramach tego model+komponent
+            comp_df = comp_df.reset_index(drop=True)
+            comp_df['file_index'] = range(len(comp_df))
+            n_files = len(comp_df)
+            
+            # Mapa track_stem dla etykiet
+            track_stems = comp_df['track_stem'].tolist()
+            
+            # Pobierz wpływ tego konkretnego komponentu
+            comp_cols = {
+                'vocals0': 'vocals0_influence',
+                'drums0': 'drums0_influence', 
+                'bass0': 'bass0_influence',
+                'other0': 'other0_influence'
+            }
+            comp_influence_col = comp_cols[comp]
+            
+            # TOP 5 cech dla tego komponentu (żeby nie generować za dużo plików)
+            comp_features = [c for c in feature_cols if comp_df[c].notna().sum() > 0]
+            
+            for feat_col in comp_features:
+                if feat_col not in comp_df.columns or comp_df[feat_col].isna().all():
+                    continue
+                
+                # Przygotuj dane (bez duplikatów!)
+                d_pred = comp_df[['file_index', 'prediction_score']].dropna()
+                d_lime = comp_df[['file_index', comp_influence_col]].dropna()
+                d_feat = comp_df[['file_index', feat_col]].dropna()
+                
+                # Sortuj i uzupełnij brakujące
+                all_idx = range(n_files)
+                d_pred = safe_reindex_fill(d_pred, 'file_index', all_idx)
+                d_lime = safe_reindex_fill(d_lime, 'file_index', all_idx)
+                d_feat = safe_reindex_fill(d_feat, 'file_index', all_idx)
+
+                # 3 rzędy subplotów
+                fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 12), sharex=True, height_ratios=[1, 1, 1])
+                
+                # RZĄD 1: PREDYKCJE MODELU
+                ax1.plot(d_pred['file_index'], d_pred['prediction_score'], 'o-', linewidth=3, markersize=8,
+                        color='darkred', alpha=0.9, label='Predictions (P>0.5=Fake)')
+                ax1.axhline(y=0.5, color='black', ls='-', lw=2.5, alpha=0.8)
+                ax1.set_ylabel('Predictions', fontweight='bold', fontsize=12)
+                ax1.grid(alpha=0.3, ls='--')
+                ax1.legend(loc='upper right')
+                ax1.set_title(f'{model} | {comp}', fontsize=14, fontweight='bold', pad=20)
+                
+                # RZĄD 2: WPŁYW LIME KOMPONENTU
+                ax2.plot(d_lime['file_index'], d_lime[comp_influence_col], 'o-', linewidth=3, markersize=8,
+                        color='purple', alpha=0.85, label=f'LIME: {comp}')
+                ax2.axhline(y=0, color='gray', ls=':', lw=2)
+                ax2.set_ylabel('LIME Influence', fontweight='bold', fontsize=12)
+                ax2.grid(alpha=0.3, ls='--')
+                ax2.legend(loc='upper right')
+                
+                # RZĄD 3: CECHA FIZYCZNA Z KOMPONENTU
+                ax3.plot(d_feat['file_index'], d_feat[feat_col], 'o-', linewidth=3, markersize=8,
+                        color='steelblue', alpha=0.85, label=feat_col.replace('_', ' ').title())
+                ax3.set_xlabel('File Index in Component')
+                ax3.set_ylabel('Physical Feature', fontweight='bold', fontsize=12)
+                ax3.grid(alpha=0.3, ls='--')
+                ax3.legend(loc='upper right')
+                
+                plt.tight_layout()
+                
+                # Mapa plików po prawej
+                short_labels = [f"{i}: {stem[:25]}..." for i, stem in enumerate(track_stems)]
+                fig.text(1.015, 0.5, 'File Mapping:\n' + '\n'.join(short_labels[:10]), 
+                        fontsize=17, va='center', ha='left',
+                        bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3', alpha=0.95))
+                
+                # Zapis
+                safe_feat = re.sub(r'[^a-zA-Z0-9_]', '_', feat_col)
+                safe_comp = comp.replace('0', '')
+                outfile = comp_dir / f"{safe_comp}_{safe_feat}_3rows.png"
+                plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close()
+                
+                print(f"✓ {model}/{safe_comp}_{safe_feat}_3rows.png")
+
+def plot_audiolime_3rows_multicolumn(features_df: pd.DataFrame, lime_json_path: Path, outputdir: Path):
+    """3 rows × N columns (components): predictions | LIME influence | physical feature."""
+    setup_professional_style()
+    sns.set_theme(style='whitegrid')
+    
+    lime_df = load_audiolime_explanations(lime_json_path)
+    full_df = pd.merge(features_df, lime_df, on=["model", "track", "component_name"], how="inner")
+    
+    outputdir = outputdir / 'audiolime_3rows_multicolumn'
+    outputdir.mkdir(parents=True, exist_ok=True)
+    
+    components = ['vocals0', 'drums0', 'bass0', 'other0']
+    comp_cols = {'vocals0': 'vocals0_influence', 'drums0': 'drums0_influence', 
+                 'bass0': 'bass0_influence', 'other0': 'other0_influence'}
+    comp_names = ['Vocals', 'Drums', 'Bass', 'Other']
+    n_comp = len(components)
+    
+    # Filtruj cechy z danymi we wszystkich komponentach
+    exclude_cols = ['model', 'track', 'track_id', 'datatype', 'component_name', 'component_type', 
+                    'prediction_score', 'predicted_class', 'vocals0_influence', 'drums0_influence', 
+                    'bass0_influence', 'other0_influence', 
+                    'abs_importance', 'importance'] + list(comp_cols.values())
+    feature_cols = [c for c in full_df.columns if pd.api.types.is_numeric_dtype(full_df[c]) and c not in exclude_cols]
+    
+    print(f"All feature cols: {len(feature_cols)}")
+    
+    models = sorted(full_df['model'].unique())
+    
+    for model in models:
+        model_df = full_df[full_df['model'] == model]
+        model_dir = outputdir / model.replace(' ', '_')
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        track_stems = sorted(model_df['track_stem'].dropna().unique(), key=try_num)
+        file_idx_map = {stem: i for i, stem in enumerate(track_stems)}
+        n_files = len(track_stems)
+        
+        # Przygotuj dane PREDYKCJI (wspólne dla wszystkich komponentów)
+        model_pred = model_df.groupby('track_stem')['prediction_score'].mean()
+        pred_values = [model_pred.get(stem, np.nan) for stem in track_stems]
+        
+        # Dla każdej CECHY fizycznej
+        for feat_col in feature_cols:
+            if model_df[feat_col].isna().all():
+                continue
+            
+            fig, axes = plt.subplots(3, n_comp, figsize=(5*n_comp, 12), 
+                                   sharex='col', sharey='row')
+            if n_comp == 1:
+                axes = axes.reshape(3, 1)
+            
+            # RZĄD 1: PREDYKCJE (identyczne we wszystkich kolumnach)
+            for j in range(n_comp):
+                axes[0, j].plot(range(n_files), pred_values, 'o-', lw=2.5, ms=6, 
+                               color='darkred', alpha=0.9)
+                axes[0, j].axhline(0.5, color='black', ls='-', lw=2, alpha=0.8)
+                axes[0, j].set_title('Predictions', fontweight='bold')
+                axes[0, j].grid(alpha=0.3, ls='--')
+            
+            # RZĘDY 2-3: LIME + CECHA per komponent
+            for j, comp in enumerate(components):
+                comp_data = model_df[model_df['component_name'] == comp]
+                
+                # RZĄD 2: Wpływ LIME
+                lime_vals = comp_data[comp_cols[comp]].tolist()
+                if len(lime_vals) > 0:
+                    axes[1, j].plot(range(min(n_files, len(lime_vals))), lime_vals[:n_files], 
+                                   'o-', lw=2.5, ms=6, color='purple', alpha=0.85)
+                    axes[1, j].axhline(0, color='gray', ls=':', lw=2)
+                axes[1, j].set_title(f'{comp_names[j]} LIME', fontweight='bold')
+                axes[1, j].grid(alpha=0.3, ls='--')
+                
+                # RZĄD 3: Cecha fizyczna
+                feat_vals = comp_data[feat_col].tolist()
+                if len(feat_vals) > 0:
+                    axes[2, j].plot(range(min(n_files, len(feat_vals))), feat_vals[:n_files], 
+                                   'o-', lw=2.5, ms=6, color='steelblue', alpha=0.85)
+                axes[2, j].set_title(f'{comp_names[j]} {feat_col.replace("_", " ").title()}', fontweight='bold')
+                axes[2, j].grid(alpha=0.3, ls='--')
+                axes[2, j].set_xlabel('File Index')
+            
+            plt.suptitle(f'{model}: {feat_col.replace("_", " ").title()} | All components', 
+                        fontsize=16, y=0.98)
+            plt.tight_layout()
+            
+            # Etykiety plików (dla pierwszej kolumny)
+            short_labels = [f"{i}: {s[:25]}..." for i, s in enumerate(track_stems)]
+            fig.text(1.02, 0.48, 'File Mapping:\n' + '\n'.join(short_labels[:10]), 
+                    fontsize=17, va='center', ha='left',
+                    bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3', alpha=0.95))
+            
+            safe_feat = re.sub(r'[^a-zA-Z0-9_]', '_', feat_col)
+            outfile = model_dir / f"{safe_feat}_all_components.png"
+            plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"✓ {model}/{safe_feat}_all_components.png")
 
 def viz_component_pos_neg_boxplots(
     features_df,
@@ -1256,11 +1536,13 @@ def main():
     config = load_yaml(Path(args.config))
 
     data_cfg = config.get("data", {})
+    explanations_cfg = config.get("explanations_data", {})
     output_cfg = config.get("output", {})
     lime_comp_features_cfg = config.get("lime_comp_features", {})
     comp_version = lime_comp_features_cfg.get("version", "separated")
 
     data_root = Path(data_cfg.get("features_path"))
+    explanations_path = explanations_cfg.get("explanations_path")
     result_root = Path(output_cfg.get("result_path"))
 
     data_root = data_root / "separated_components" if comp_version == "separated" else data_root / "reversed_separated_components"
@@ -1278,20 +1560,32 @@ def main():
 
     features_df, features_to_analyze = load_and_prepare_data_full(features_path)
 
-    viz_component_pos_neg_boxplots(
-        features_df,
-        base_output_folder=output_root,
-    )
+    # viz_component_pos_neg_boxplots(
+    #     features_df,
+    #     base_output_folder=output_root,
+    # )
 
-    viz_feature_groups_by_component(
-        features_df,
-        base_output_folder=output_root
-    )
+    # viz_feature_groups_by_component(
+    #     features_df,
+    #     base_output_folder=output_root
+    # )
 
-    viz_feature_values_vs_importance_by_component(
-        features_df,
-        base_output_folder=output_root,
-    )
+    # viz_feature_values_vs_importance_by_component(
+    #     features_df,
+    #     base_output_folder=output_root,
+    # )
+
+    if explanations_path:
+        explanations_path = Path(explanations_path) / "explanations.json"
+        plot_audiolime_predictions_influence_features(
+            features_df, Path(explanations_path), output_root
+        )
+
+        plot_audiolime_3rows_multicolumn(
+            features_df=features_df,
+            lime_json_path=Path(explanations_path),
+            outputdir=output_root
+        )
 
 if __name__ == "__main__":
     main()
