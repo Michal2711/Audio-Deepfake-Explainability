@@ -239,10 +239,10 @@ def main():
         except Exception as e:
             print(f"⚠️  Error in per-model visualizations: {e}")
 
-    visualize_per_sample_explanations(
-        explanations=explanations,
-        features_outputdir_full= result_path / experiment_name / "full_track",
-    )
+    # visualize_per_sample_explanations(
+    #     explanations=explanations,
+    #     features_outputdir_full= result_path / experiment_name / "full_track",
+    # )
 
     print("\n" + "=" * 70)
     print("✅ Experiment completed successfully!")

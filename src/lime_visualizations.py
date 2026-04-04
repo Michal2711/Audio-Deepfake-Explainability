@@ -188,6 +188,37 @@ def visualize_explanations(explanations, output_dir="explanations_visualizations
     plt.savefig(f"{output_dir}/influence_vs_probability.png", dpi=300)
     plt.close()
 
+    # 4. Correlation r: influence vs probability
+    plt.figure(figsize=(10, 6))
+
+    corr = df.groupby(['component', 'data_type']).apply(
+        lambda g: g['influence'].corr(g['probability'])
+    ).unstack()
+
+    for col in ['real', 'generated']:
+        if col not in corr.columns:
+            corr[col] = np.nan
+
+    corr = corr.reindex(component_order)
+
+    ax = corr.plot(
+        kind='bar',
+        ax=plt.gca(),
+        ylim=(-1, 1),
+        color={'real': 'blue', 'generated': 'red'}
+    )
+
+    plt.axhline(0, color='black', linewidth=1)
+    plt.title('Pearson r: component influence vs fake probability')
+    plt.ylabel('Correlation r')
+    plt.xlabel('Audio component')
+    plt.xticks(rotation=0)
+    plt.legend(title='Data type')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/correlation_r_influence_probability.png", dpi=300)
+    plt.close()
+
     print(f"✅ Generated visualizations in: {output_dir}")
 
 def visualize_explanations_by_model(explanations, output_dir="explanations_visualizations"):
@@ -255,7 +286,7 @@ def visualize_explanations_by_model(explanations, output_dir="explanations_visua
         return
 
     component_order = ['vocals0', 'piano0', 'drums0', 'bass0', 'other0']
-    model_order = ['MusicGen', 'Suno', 'SunoPro', 'Udio', 'YuE', 'Real', 'ElevenLabs']
+    model_order = ['ElevenLabs', 'Real', 'Suno', 'SunoPro', 'Udio']
 
     # 1. Per-model visualizations
     for model in df['model'].unique():
@@ -295,10 +326,13 @@ def visualize_explanations_by_model(explanations, output_dir="explanations_visua
     # 2. Model Comparison
     plt.figure(figsize=(16, 8))
     sns.barplot(
-        data=df, x='model', y='influence', hue='component',
-        order=[m for m in model_order if m in df['model'].unique()],
+        data=df, 
+        x='model', 
+        y='influence', 
+        hue='component',
         hue_order=[c for c in component_order if c in df['component'].unique()],
-        errorbar='sd', palette='viridis'
+        order=[m for m in model_order if m in df['model'].unique()],
+        palette='viridis'
     )
     plt.title('Component Influence Comparison Across Models')
     plt.ylabel('Mean Influence')
@@ -341,6 +375,44 @@ def visualize_explanations_by_model(explanations, output_dir="explanations_visua
 
     print(f"✅ Generated visualizations in: {output_dir}")
 
+    # 5. Correlation r: influence vs probability per model & component
+    corr_df = (
+        df.groupby(['model', 'component'])
+          .apply(lambda g: g['influence'].corr(g['probability']))
+          .reset_index(name='r')
+    )
+
+    corr_df = corr_df[
+        corr_df['component'].isin([c for c in component_order if c in df['component'].unique()])
+    ]
+    corr_df['model'] = pd.Categorical(
+        corr_df['model'],
+        categories=[m for m in model_order if m in df['model'].unique()],
+        ordered=True
+    )
+
+    plt.figure(figsize=(16, 8))
+    sns.barplot(
+        data=corr_df,
+        x='model',
+        y='r',
+        hue='component',
+        hue_order=[c for c in component_order if c in df['component'].unique()],
+        order=[m for m in model_order if m in df['model'].unique()],
+        palette='viridis'
+    )
+
+    plt.axhline(0, color='black', linewidth=1)
+    plt.ylim(-1, 1)
+    plt.title('Pearson r: component influence vs fake probability per model')
+    plt.ylabel('Correlation r')
+    plt.xlabel('Model')
+    plt.legend(title='Component', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/correlation_r_per_model.png", dpi=300)
+    plt.close()
+
 def plot_waveforms_overlay_with_influences(
     original_audio,
     components,
@@ -355,7 +427,6 @@ def plot_waveforms_overlay_with_influences(
     duration = len(original_audio) / sr
     times = np.linspace(0, duration, len(original_audio))
 
-    # Gray original waveform
     plt.plot(times, original_audio, color="grey", linewidth=1.1, alpha=0.55, label="Original")
 
     color_map = {
@@ -532,7 +603,6 @@ def plot_radar_influences_per_sample(
             clip_on=False
         )
 
-    # Legenda na dole
     legend_elements = []
     for i, comp in enumerate(component_order):
         legend_elements.append(
