@@ -10,4 +10,4 @@ output:
   result_path: "results/AudioLIME/FakeRealMusicOriginal/AudioLIME_500_samples_full_track/lime_features/"
 
 lime_comp_features:
-  version: "separated"
+  version: "reversed" # "separated" or "reversed"

@@ -1,6 +1,9 @@
 data:
   features_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_mixture/fbp_features/"
 
+explanations_data:
+  explanations_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_mixture/"
+
 output:
   result_path: "results/FBP/FakeRealMusicOriginal/FBP_default_preset_rel_stft_att_0.25_mixture/fbp_features/"
 
