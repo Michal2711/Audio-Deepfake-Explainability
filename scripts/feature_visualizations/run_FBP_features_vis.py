@@ -8,6 +8,7 @@ import sys
 import argparse
 from pathlib import Path
 from collections import defaultdict
+import re
 
 import yaml
 
@@ -173,7 +174,9 @@ def load_and_prepare_data_full(json_file):
                 
                 all_rows.append(row)
     
+
     features_df = pd.DataFrame(all_rows)
+    features_df['band_key'] = features_df['band_key'].str.replace('mixture_', '').str.replace('_', '-').str.replace('.0', '')
     
     if features_df.empty:
         print("⚠️ Warning: No data loaded from JSON file!")
@@ -191,6 +194,77 @@ def load_and_prepare_data_full(json_file):
     print(f"{'='*80}\n")
     
     return features_df, feature_cols
+
+def load_fbp_bands_explanations(root_folder: Path) -> pd.DataFrame:
+    all_rows = []
+    typemapping = {'ElevenLabs': 'GENERATED', 'REAL': 'REAL', 'SUNO': 'GENERATED',
+                   'SUNOPRO': 'GENERATED', 'UDIO': 'GENERATED'}
+    
+    fbp_results_path = root_folder / "fbp_results.json"
+    predictions_dict = {}
+    if fbp_results_path.exists():
+        with open(fbp_results_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        for model_name, tracks_dict in data.items():
+            for track_name, track_data in tracks_dict.items():
+                for comp_name, comp_data in track_data.get("components", {}).items():
+                    pred_score = comp_data.get('baseline_pred_mean', np.nan)
+                key = f"{model_name}_{track_name}_{comp_name}"
+                predictions_dict[key] = float(pred_score)
+        print(f"Loaded {len(predictions_dict)} predictions")
+    else:
+        print(f" fbp_results.json w {root_folder}")
+    
+    bands_folder = Path(root_folder / "bands")
+
+    for model_folder in bands_folder.iterdir():
+        if not model_folder.is_dir() or model_folder.name == 'fbp_results.json': continue
+        model_name = model_folder.name
+        
+        for track_folder in model_folder.iterdir():
+            if not track_folder.is_dir(): continue
+            track_name = track_folder.name
+                        
+            for comp_folder in track_folder.iterdir():
+                if not comp_folder.is_dir(): continue
+                comp_name = comp_folder.name
+
+                pred_key = f"{model_name}_{track_name}_{comp_name}"
+                pred_score = predictions_dict.get(pred_key, np.nan)
+                
+                json_pattern = f"{track_name}_bands_metadata.json"
+                json_file = comp_folder / json_pattern
+                if not json_file.exists(): continue
+                
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    bands = data.get('bands', [])
+                    for band in bands:
+                        row = {
+                            'model': model_name,
+                            'track': track_name,
+                            'component': band.get('component', comp_name),
+                            'band_key': f"{int(band.get('low', 0))}-{int(band.get('high', 0))}Hz",  # 20-100Hz
+                            'low': float(band.get('low', 0)),
+                            'high': float(band.get('high', 0)),
+                            'importance': float(band.get('importance', 0)),
+                            'abs_importance': float(band.get('abs_importance', 0)),
+                            'type': band.get('type', 'UNKNOWN'),
+                            'prediction_score': pred_score
+                        }
+                        all_rows.append(row)
+                        
+                except Exception as e:
+                    print(f"Error {json_file}: {e}")
+    
+    fbp_df = pd.DataFrame(all_rows)
+    if fbp_df.empty:
+        print("Warning: No FBP data found")
+    
+    return fbp_df
 
 def format_influence_statistics_box(labels, plot_data):
     rows = []
@@ -369,6 +443,337 @@ def setup_professional_style():
     plt.rcParams['ytick.major.width'] = 1.5
     
     sns.set_palette("husl")
+
+def safe_reindex_fill(df, index_col, target_idx):
+    df_sorted = df.sort_values(index_col)
+    df_reidx = df_sorted.set_index(index_col).reindex(target_idx, method='ffill')
+    df_final = df_reidx.ffill().reset_index()
+    df_final.rename(columns={'index': index_col}, inplace=True)
+    return df_final
+
+def plot_fbp_predictions_influence_features(
+    features_df: pd.DataFrame, 
+    fbp_json_path: Path, 
+    output_dir: Path
+):
+    fbp_explanations_df = load_fbp_bands_explanations(fbp_json_path)
+
+    setup_professional_style()
+    sns.set_theme(style="whitegrid")
+
+    # Merge features + FBP explanations
+    merge_cols = ['model', 'track', 'component', 'band_key']
+    full_df = pd.merge(
+        features_df,
+        fbp_explanations_df, 
+        on=merge_cols, 
+        how='inner'
+    )
+    
+    full_df['importance'] = full_df['importance_y']
+    output_dir = Path(output_dir) / "fbp_3rows_per_band"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    exclude_cols = ['model', 'track', 'component', 'data_type', 
+                    'band_key', 'band_type', 'prediction_score', 
+                    'importance', 'abs_importance', 'low_freq', 
+                    'high_freq', 'track_stem'
+    ]
+    feature_cols = [col for col in features_df.columns if col not in exclude_cols]
+    
+    models = sorted(full_df['model'].unique())
+    
+    for model in models:
+        model_df = full_df[full_df['model'] == model]
+        model_dir = output_dir / model.replace('/', '_')
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        unique_bands = sorted(model_df['band_key'].unique())
+        print(f"Model {model}: {len(unique_bands)} bands")
+        
+        for band_key in unique_bands:
+            band_df = model_df[model_df['band_key'] == band_key].reset_index(drop=True)
+            if len(band_df) == 0: 
+                print(f"  Skip {model}/{band_key}: No data")
+                continue
+            
+            band_df['file_index'] = range(len(band_df))
+            if 'file_index' not in band_df.columns:
+                band_df = band_df.sort_values('file_index').groupby('file_index').first().reset_index()
+            n_files = len(band_df)
+            track_stems = band_df['track'].tolist()
+            
+            band_features = [c for c in feature_cols if band_df[c].notna().sum() > 0]
+            print(f"  Band {band_key}: {len(band_features)} features")
+            
+            for feat_col in band_features:
+
+                base_feat_name = re.sub(r'_(mean|std|min|max)$', '', feat_col)
+
+                d_pred = band_df[[
+                    'file_index', 'prediction_score'
+                ]].dropna()
+                d_fbp = band_df[[
+                    'file_index', 'importance'
+                ]].dropna()
+                d_feat = band_df[[
+                    'file_index', feat_col
+                ]].dropna()
+
+                all_idx = range(n_files)
+                d_pred = safe_reindex_fill(d_pred, 'file_index', all_idx)
+                d_fbp = safe_reindex_fill(d_fbp, 'file_index', all_idx)
+                d_feat = safe_reindex_fill(d_feat, 'file_index', all_idx)
+
+                fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 12), sharex=True, height_ratios=[1, 1, 1])
+                
+                # Rząd 1: Predictions
+                ax1.plot(d_pred['file_index'], d_pred['prediction_score'], 'o-', linewidth=3, markersize=8, 
+                        color='darkred', alpha=0.9, label='Predictions (P>0.5=FAKE)')
+                ax1.axhline(y=0.5, color='black', ls='-', lw=2.5, alpha=0.8)
+                ax1.set_ylabel('Predictions', fontweight='bold', fontsize=12)
+                ax1.grid(alpha=0.3, ls='--')
+                ax1.legend(loc='upper right')
+                
+                # Rząd 2: FBP Influence
+                ax2.plot(d_fbp['file_index'], d_fbp['importance'], 'o-', linewidth=3, markersize=8, 
+                        color='purple', alpha=0.85, label=f'FBP {band_key}')
+                ax2.axhline(y=0, color='gray', ls=':', lw=2)
+                ax2.set_ylabel('FBP Importance', fontweight='bold', fontsize=12)
+                ax2.grid(alpha=0.3, ls='--')
+                ax2.legend(loc='upper right')
+                
+                # Rząd 3: Physical Feature
+                ax3.plot(d_feat['file_index'], d_feat[feat_col], 'o-', linewidth=3, markersize=8, 
+                        color='steelblue', alpha=0.85, label=feat_col.replace('_', ' ').title())
+                ax3.set_xlabel('File Index')
+                ax3.set_ylabel('Physical Feature', fontweight='bold', fontsize=12)
+                ax3.grid(alpha=0.3, ls='--')
+                ax3.legend(loc='upper right')
+                
+                ax1.set_title(f'{model} | {band_key}', fontsize=14, fontweight='bold', pad=20)
+                
+                plt.tight_layout()
+                
+                short_labels = [
+                    f'{i}: {stem[:25]}'
+                    for i, stem in enumerate(track_stems)
+                ]
+                fig.text(
+                    1.02, 
+                    0.48, 
+                    'File Mapping:\n' + '\n'.join(short_labels),
+                    fontsize=15, 
+                    va='center', 
+                    ha='left',
+                    bbox=dict(
+                        facecolor='white', 
+                        edgecolor='gray', 
+                        boxstyle='round,pad=0.3',
+                        alpha=0.95
+                    )
+                )
+                
+                safe_band = re.sub(r'[^a-zA-Z0-9]', '_', band_key)
+                safe_feat = re.sub(r'[^a-zA-Z0-9]', '_', feat_col)
+                base_feat_dir = model_dir / safe_band / base_feat_name
+                base_feat_dir.mkdir(exist_ok=True, parents=True)
+                outfile = base_feat_dir / f'{safe_band}_{safe_feat}_3rows.png'
+
+                plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close()
+                print(f"  Saved: {safe_band}_{safe_feat}_3rows.png")
+    
+def plot_fbp_3rows_multicolumn(
+    features_df: pd.DataFrame,
+    fbp_json_path: Path,
+    output_dir: Path
+):
+    setup_professional_style()
+    sns.set_theme(style="whitegrid")
+
+    fbp_explanations_df = load_fbp_bands_explanations(fbp_json_path)
+
+    merge_cols = ['model', 'track', 'component', 'band_key']
+    full_df = pd.merge(
+        features_df,
+        fbp_explanations_df,
+        on=merge_cols,
+        how='inner',
+        suffixes=('_feat', '_fbp')
+    )
+    if full_df.empty:
+        print("Empty merge result")
+        return
+
+    exclude_cols = [
+        'model', 'track', 'band_key', 'data_type',
+        'component', 'importance', 'abs_importance',
+        'low_freq', 'high_freq', 'band_type', 'track_stem',
+    ]
+    feature_cols = []
+    for c in features_df.columns:
+        if c in exclude_cols:
+            continue
+        if pd.api.types.is_numeric_dtype(features_df[c]):
+            feature_cols.append(c)
+
+
+    out_root = Path(output_dir) / "fbp_3rows_multicolumn"
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    models = sorted(full_df['model'].unique())
+
+    for model in models:
+        model_df = full_df[full_df['model'] == model].copy()
+        model_dir = out_root / model.replace('/', '_')
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        track_stems = sorted(model_df['track'].unique())
+        nfiles = len(track_stems)
+        if nfiles == 0:
+            continue
+
+        if 'prediction_score' in model_df.columns:
+            pred_col = 'prediction_score'
+        elif 'prediction_score' in model_df.columns:
+            pred_col = 'prediction_score'
+        else:
+            pred_col = None
+
+        if pred_col is not None:
+            model_pred = model_df.groupby('track')[pred_col].mean()
+            pred_values = [model_pred.get(t, np.nan) for t in track_stems]
+        else:
+            pred_values = [0.5] * nfiles
+
+        bands = sorted(model_df['band_key'].unique())
+        n_comp = len(bands)
+        if n_comp == 0:
+            continue
+
+        for feat_col in feature_cols:
+            if model_df[feat_col].isna().all():
+                continue
+
+            base_feat_name = re.sub(r'_(mean|std|min|max)$', '', feat_col)
+            base_feat_dir = model_dir / base_feat_name
+            base_feat_dir.mkdir(exist_ok=True, parents=True)
+
+            fig, axes = plt.subplots(
+                3, n_comp,
+                figsize=(5 * n_comp, 12),
+                sharex='col',
+                sharey='row'
+            )
+            if n_comp == 1:
+                axes = axes.reshape(3, 1)
+
+            for j in range(n_comp):
+                ax = axes[0, j]
+                ax.plot(
+                    range(nfiles),
+                    pred_values,
+                    'o-',
+                    lw=2.5,
+                    ms=6,
+                    color='darkred',
+                    alpha=0.9,
+                    label='Predictions'
+                )
+                ax.axhline(0.5, color='black', ls='-', lw=2, alpha=0.8)
+                if j == 0:
+                    ax.set_ylabel('Predictions\n(P>0.5=FAKE)', fontweight='bold')
+                ax.set_title(bands[j], fontweight='bold')
+                ax.grid(alpha=0.3, ls='--')
+            axes[0, 0].legend(loc='upper left')
+
+            for j, band in enumerate(bands):
+                ax = axes[1, j]
+                band_data = model_df[model_df['band_key'] == band]
+
+                if 'importance_fbp' in band_data.columns:
+                    imp_series = band_data.groupby('track')['importance_fbp'].mean()
+                elif 'importance' in band_data.columns:
+                    imp_series = band_data.groupby('track')['importance'].mean()
+                else:
+                    imp_series = pd.Series(dtype=float)
+
+                imp_vals = [imp_series.get(t, np.nan) for t in track_stems]
+
+                ax.plot(
+                    range(nfiles),
+                    imp_vals,
+                    'o-',
+                    lw=2.5,
+                    ms=6,
+                    color='purple',
+                    alpha=0.85,
+                    label=f'FBP {band}'
+                )
+                ax.axhline(0, color='gray', ls=':', lw=2)
+                if j == 0:
+                    ax.set_ylabel('FBP Importance', fontweight='bold')
+                ax.grid(alpha=0.3, ls='--')
+
+            axes[1, 0].legend(loc='upper left')
+
+            for j, band in enumerate(bands):
+                ax = axes[2, j]
+                band_data = model_df[model_df['band_key'] == band]
+
+                feat_series = band_data.groupby('track')[feat_col].mean()
+                feat_vals = [feat_series.get(t, np.nan) for t in track_stems]
+
+                ax.plot(
+                    range(nfiles),
+                    feat_vals,
+                    'o-',
+                    lw=2.5,
+                    ms=6,
+                    color='steelblue',
+                    alpha=0.85
+                )
+                if j == 0:
+                    ax.set_ylabel(
+                        feat_col.replace('_', ' ').title(),
+                        fontweight='bold'
+                    )
+                ax.set_xlabel('Track index')
+                ax.grid(alpha=0.3, ls='--')
+
+            plt.suptitle(
+                f'{model} | {feat_col.replace("_", " ").title()} – all bands',
+                fontsize=16,
+                y=0.98,
+                fontweight='bold'
+            )
+            plt.tight_layout()
+
+            short_labels = [
+                f'{i}: {stem[:25]}'
+                for i, stem in enumerate(track_stems)
+            ]
+            fig.text(
+                1.02,
+                0.48,
+                'File Mapping:\n' + '\n'.join(short_labels),
+                fontsize=15,
+                va='center',
+                ha='left',
+                bbox=dict(
+                    facecolor='white',
+                    edgecolor='gray',
+                    boxstyle='round,pad=0.3',
+                    alpha=0.95
+                )
+            )
+
+            safe_feat = re.sub(r'[^a-zA-Z0-9]', '_', feat_col)
+            out_file = base_feat_dir / f'{safe_feat}_allbands_3rows.png'
+            plt.savefig(out_file, dpi=300, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"[FBP multicol] Saved {out_file}")
 
 def viz_component_pos_neg_boxplots(
     features_df,
@@ -818,7 +1223,6 @@ def viz_component_pos_neg_boxplots(
     
     print(f"\n{'='*80}")
     print(f"✅ Component-split boxplot visualizations saved to: {base_folder}")
-    print(f"✅ Ready for academic thesis presentation!")
     print(f"{'='*80}\n")
 
 def viz_feature_groups_by_freq_band(
@@ -1383,11 +1787,13 @@ def main():
     config = load_yaml(Path(args.config))
 
     data_cfg = config.get("data", {})
+    explanations_cfg = config.get("explanations_data", {})
     output_cfg = config.get("output", {})
     fbp_band_features_cfg = config.get("fbp_band_features", {})
     band_version = fbp_band_features_cfg.get("version", "separated")
 
     data_root = Path(data_cfg.get("features_path"))
+    explanations_path = explanations_cfg.get("explanations_path")
     result_root = Path(output_cfg.get("result_path"))
 
     data_root = data_root / "separated_bands" if band_version == "separated" else data_root / "reversed_separated_bands"
@@ -1405,30 +1811,36 @@ def main():
 
     features_df, features_to_analyze = load_and_prepare_data_full(features_path)
 
-    print("DEBUG: Kolumny z band_meta:")
-    meta_cols = [col for col in features_df.columns if col in ['component', 'band_type', 'importance', 'abs_importance', 'low_freq', 'high_freq']]
-    print(f"Meta columns found: {meta_cols}")
-    print(f"Sample values for first row:\n{features_df[meta_cols].iloc[0] if not features_df.empty else 'EMPTY'}")
-    print(f"Unique components: {features_df.get('component', pd.Series()).unique()}")
-
     print(f"\n✓ Data loaded: {len(features_df)} samples, {len(features_to_analyze)} features")
     print(f"✓ Models: {features_df['model'].value_counts().to_dict()}\n")
 
     features_df = add_freq_band_from_band_key(features_df)
 
-    viz_component_pos_neg_boxplots(
-        features_df,
-        base_output_folder=output_root,
+    # viz_component_pos_neg_boxplots(
+    #     features_df,
+    #     base_output_folder=output_root,
+    # )
+
+    # viz_feature_groups_by_freq_band(
+    #     features_df,
+    #     base_output_folder=output_root
+    # )
+
+    # viz_feature_values_vs_importance_by_freq_band(
+    #     features_df,
+    #     base_output_folder=output_root,
+    # )
+
+    plot_fbp_predictions_influence_features(
+        features_df=features_df, 
+        fbp_json_path=Path(explanations_path), 
+        output_dir=output_root
     )
 
-    viz_feature_groups_by_freq_band(
-        features_df,
-        base_output_folder=output_root
-    )
-
-    viz_feature_values_vs_importance_by_freq_band(
-        features_df,
-        base_output_folder=output_root,
+    plot_fbp_3rows_multicolumn(
+        features_df=features_df,
+        fbp_json_path=Path(explanations_path),
+        output_dir=output_root
     )
 
 if __name__ == "__main__":

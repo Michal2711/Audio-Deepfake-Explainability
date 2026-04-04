@@ -9,6 +9,8 @@ import argparse
 from pathlib import Path
 from collections import defaultdict
 import yaml
+import matplotlib.patches as mpatches
+from matplotlib.colors import to_rgba
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -397,6 +399,10 @@ def plot_audiolime_predictions_influence_features(features_df: pd.DataFrame, lim
                 if feat_col not in comp_df.columns or comp_df[feat_col].isna().all():
                     continue
                 
+                base_feat_name = re.sub(r'_(mean|std|min|max)$', '', feat_col)
+                base_feat_dir = comp_dir / base_feat_name
+                base_feat_dir.mkdir(exist_ok=True, parents=True)
+
                 d_pred = comp_df[['file_index', 'prediction_score']].dropna()
                 d_lime = comp_df[['file_index', comp_influence_col]].dropna()
                 d_feat = comp_df[['file_index', feat_col]].dropna()
@@ -439,7 +445,7 @@ def plot_audiolime_predictions_influence_features(features_df: pd.DataFrame, lim
                 
                 safe_feat = re.sub(r'[^a-zA-Z0-9_]', '_', feat_col)
                 safe_comp = comp.replace('0', '')
-                outfile = comp_dir / f"{safe_comp}_{safe_feat}_3rows.png"
+                outfile = base_feat_dir / f"{safe_comp}_{safe_feat}_3rows.png"
                 plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
                 plt.close()
                 
@@ -486,6 +492,8 @@ def plot_audiolime_3rows_multicolumn(features_df: pd.DataFrame, lime_json_path: 
         for feat_col in feature_cols:
             if model_df[feat_col].isna().all():
                 continue
+        
+            base_feat_name = re.sub(r'_(mean|std|min|max)$', '', feat_col)
             
             fig, axes = plt.subplots(3, n_comp, figsize=(5*n_comp, 12), 
                                    sharex='col', sharey='row')
@@ -528,7 +536,10 @@ def plot_audiolime_3rows_multicolumn(features_df: pd.DataFrame, lime_json_path: 
                     bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3', alpha=0.95))
             
             safe_feat = re.sub(r'[^a-zA-Z0-9_]', '_', feat_col)
-            outfile = model_dir / f"{safe_feat}_all_components.png"
+            base_feat_dir = model_dir / base_feat_name
+            base_feat_dir.mkdir(exist_ok=True, parents=True)
+            outfile = base_feat_dir / f"{safe_feat}_all_components.png"
+
             plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
             plt.close()
             print(f"✓ {model}/{safe_feat}_all_components.png")
@@ -1475,6 +1486,641 @@ def viz_feature_values_vs_importance_by_component(
 
         print(f"{comp_base_folder} done")
 
+MODEL_ORDER = ['ElevenLabs', 'REAL', 'SUNO', 'SUNO_PRO', 'UDIO']
+
+TYPE_MAPPING = {
+    'ElevenLabs': 'GENERATED',
+    'REAL': 'REAL',
+    'SUNO': 'GENERATED',
+    'SUNO_PRO': 'GENERATED',
+    'UDIO': 'GENERATED',
+}
+
+FEATURE_GROUPS_DEF = {
+    'Signal_energy': [
+        'rms_'
+    ],
+    'Frequency_spectrum': [
+        'spectral_'
+    ],
+    'Fundamental_Frequency_Pitch': [
+        'f0_', 'intonation_'
+    ],
+    'Jitter_Shimmer': [
+        'jitter_', 'shimmer_'
+    ],
+    'Vocal_quality': [
+        'hnr', 'voice_breaks', 'breath_count'
+    ],
+    'Rhythm_and_temporal_features': [
+        'zero_crossing_rate', 'rhythm_'
+    ]
+}
+
+_CORR_EXCLUDE = {
+    'model', 'track', 'track_id', 'data_type', 'data_type_str',
+    'component_name', 'component_type', 'component_key',
+    'prediction_score', 'predicted_class',
+    'vocals0_influence', 'drums0_influence', 'bass0_influence', 'other0_influence',
+    'abs_importance', 'importance', 'component', 'track_stem',
+    'low_freq', 'high_freq', 'band_type',
+}
+
+def _assign_feature_group(col: str) -> str:
+    """Return the semantic group name for a feature column, or 'other' if unmatched."""
+    for group, prefixes in FEATURE_GROUPS_DEF.items():
+        for prefix in prefixes:
+            if col.startswith(prefix):
+                return group
+    return 'other'
+
+
+def _build_corr_matrix(comp_df, feature_cols, target_col, groups_bool):
+    """Build (features × groups) Pearson r DataFrame."""
+    r_dict = {}
+    for group_label, mask in groups_bool.items():
+        gdf = comp_df[mask]
+        r_vals = {}
+        for feat in feature_cols:
+            sub = gdf[[feat, target_col]].dropna()
+            r_vals[feat] = sub[feat].corr(sub[target_col]) if len(sub) >= 3 else np.nan
+        r_dict[group_label] = r_vals
+
+    r_df = pd.DataFrame(r_dict)
+    r_df = r_df.dropna(how='all')
+    if not r_df.empty:
+        stat_order = {'mean': 0, 'std': 1, 'min': 2, 'max': 3}
+        stat_suffix = re.compile(r'_(mean|std|min|max)$')
+
+        def base_name(col):
+            return stat_suffix.sub('', col)
+
+        def stat_rank(col):
+            m = stat_suffix.search(col)
+            return stat_order.get(m.group(1), 99) if m else -1
+
+        r_df['_base'] = [base_name(c) for c in r_df.index]
+        base_importance = (
+            r_df.drop(columns='_base')
+            .abs().max(axis=1)
+            .groupby(r_df['_base'])
+            .transform('max')
+        )
+        r_df['_base_importance'] = base_importance
+        r_df['_stat_rank']       = [stat_rank(c) for c in r_df.index]
+
+        r_df = (
+            r_df.sort_values(['_base_importance', '_base', '_stat_rank'],
+                             ascending=[False, True, True])
+            .drop(columns=['_base', '_base_importance', '_stat_rank'])
+        )
+    return r_df
+
+
+def _save_corr_heatmap(r_df, title, outfile):
+    """Render and save a seaborn coolwarm heatmap."""
+    if r_df.empty:
+        print(f'  ⚠️  Empty r_df – skipping {outfile.name}')
+        return
+
+    n_feats = len(r_df)
+    n_cols  = len(r_df.columns)
+    fig_h   = max(4, n_feats * 0.42 + 2.5)
+    fig_w   = max(10, n_cols * 1.6)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    mask_nan = r_df.isnull()
+
+    sns.heatmap(
+        r_df, ax=ax,
+        cmap='coolwarm', vmin=-1, vmax=1,
+        annot=True, fmt='.2f',
+        linewidths=0.4, linecolor='#dddddd',
+        mask=mask_nan,
+        cbar_kws={'label': 'Pearson r', 'shrink': 0.6},
+        annot_kws={'size': 8, 'weight': 'bold'},
+    )
+    ax.patch.set_facecolor('#f0f0f0')   # grey for NaN cells
+    ax.set_title(title, fontsize=13, fontweight='bold', pad=14)
+    ax.set_xlabel('Group', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Feature', fontsize=11, fontweight='bold')
+    ax.tick_params(axis='x', rotation=30, labelsize=10)
+    ax.tick_params(axis='y', labelsize=8)
+
+    plt.tight_layout()
+    plt.savefig(outfile, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  ✅ {outfile.relative_to(outfile.parents[4]) if outfile.parents[4].exists() else outfile.name}')
+
+def plot_feature_correlation_r_heatmaps(
+    features_df: pd.DataFrame,
+    lime_json_path: Path,
+    outputdir: Path,
+    model_order: list = None,
+) -> None:
+    """
+    Per component (vocals, drums, bass, other) × semantic feature group
+    create two heatmap PNGs:
+      1. Physical features  -  prediction score P(fake)
+      2. Physical features  -  LIME component influence
+
+    Heatmap layout
+    ──────────────
+    Rows    : feature names within the group (sorted by max |r|)
+    Columns : generated | real | ElevenLabs | REAL | SUNO | SUNO_PRO | UDIO
+    Colour  : Pearson r  (coolwarm, −1 … +1)
+
+    Output structure
+    ────────────────
+    <outputdir>/correlation_r_heatmaps/
+      vocals/
+        [Group_name]/
+          vocals_[Group_name]_r_vs_prediction.png
+          vocals_[Group_name]_r_vs_lime_influence.png
+        ...
+      drums/  ...
+      bass/   ...
+      other/  ...
+    """
+    setup_professional_style()
+    sns.set_theme(style='whitegrid')
+
+    if model_order is None:
+        model_order = MODEL_ORDER
+
+    lime_df = load_audiolime_explanations(lime_json_path)
+    full_df = pd.merge(features_df, lime_df, on=['model', 'track', 'component_name'], how='inner')
+
+    if full_df.empty:
+        print('⚠️  Merged DataFrame is empty.')
+        return
+
+    print(f'\n{"="*70}')
+    print('Generating feature correlation r heatmaps (split by feature group)…')
+    print(f'  Merged rows : {len(full_df)}')
+    print(f'{"="*70}\n')
+
+    full_df['data_type_str'] = full_df['model'].map(TYPE_MAPPING).fillna('GENERATED')
+
+    feature_cols = [
+        c for c in full_df.columns
+        if c not in _CORR_EXCLUDE
+        and pd.api.types.is_numeric_dtype(full_df[c])
+        and full_df[c].notna().sum() > 0
+    ]
+
+    feat_to_group = {c: _assign_feature_group(c) for c in feature_cols}
+    groups_present = sorted(set(feat_to_group.values()))
+    print(f'  Feature groups found: {groups_present}')
+    for g in groups_present:
+        n = sum(1 for v in feat_to_group.values() if v == g)
+        print(f'    {g}: {n} features')
+
+    model_cols = [(m, full_df['model'] == m) for m in model_order if m in full_df['model'].unique()]
+    group_defs_ordered = (
+        [('all',       pd.Series(True, index=full_df.index)),
+         ('generated', full_df['data_type_str'] == 'GENERATED'),
+         ('real',      full_df['data_type_str'] == 'REAL')]
+        + model_cols
+    )
+
+    components = ['vocals0', 'drums0', 'bass0', 'other0']
+    comp_influence_cols = {
+        'vocals0': 'vocals0_influence',
+        'drums0':  'drums0_influence',
+        'bass0':   'bass0_influence',
+        'other0':  'other0_influence',
+    }
+
+    root_out = outputdir / 'correlation_r_heatmaps'
+    root_out.mkdir(parents=True, exist_ok=True)
+
+    for comp in components:
+        comp_name = comp.replace('0', '')
+        comp_dir  = root_out / comp_name
+        comp_dir.mkdir(parents=True, exist_ok=True)
+
+        comp_df = full_df[full_df['component_name'] == comp].copy()
+        if comp_df.empty:
+            print(f'  ⏭️  No data for {comp}')
+            continue
+
+        print(f'\n  Component: {comp_name.upper()}  ({len(comp_df)} rows)')
+
+        groups_bool = {}
+        for label, mask in group_defs_ordered:
+            m = mask.reindex(comp_df.index, fill_value=False)
+            groups_bool[label] = m
+
+        influence_col = comp_influence_cols[comp]
+
+        targets = [
+            ('prediction_score', 'Prediction P(fake)',   'r_vs_prediction'),
+            (influence_col,       f'LIME influence ({comp_name})', 'r_vs_lime_influence'),
+        ]
+
+        for feat_group in groups_present:
+            grp_feats = [c for c, g in feat_to_group.items() if g == feat_group]
+            grp_feats = [c for c in grp_feats if comp_df[c].notna().sum() >= 3]
+            if not grp_feats:
+                continue
+
+            grp_dir = comp_dir / feat_group
+            grp_dir.mkdir(parents=True, exist_ok=True)
+
+            for target_col, target_label, suffix in targets:
+                if target_col not in comp_df.columns:
+                    continue
+
+                r_df = _build_corr_matrix(comp_df, grp_feats, target_col, groups_bool)
+                if r_df.empty:
+                    continue
+
+                title = (
+                    f'{comp_name.capitalize()} | {feat_group.replace("_", " ").title()}\n' 
+                    f'Pearson r  ←→  {target_label}'
+                )
+                fname = grp_dir / f'{comp_name}_{feat_group}_{suffix}.png'
+                _save_corr_heatmap(r_df, title, fname)
+
+        all_feats = [c for c in feature_cols if comp_df[c].notna().sum() >= 3]
+        for target_col, target_label, suffix in targets:
+            if target_col not in comp_df.columns:
+                continue
+
+            r_df_all = _build_corr_matrix(comp_df, all_feats, target_col, groups_bool)
+            if r_df_all.empty:
+                continue
+
+            if 'all' in r_df_all.columns:
+                r_df_all = r_df_all.reindex(
+                    r_df_all['all'].abs().sort_values(ascending=False).index
+                )
+
+            title = (
+                f'{comp_name.capitalize()} | All features\n'
+                f'Pearson r  ←→  {target_label}  (sorted by overall |r|)'
+            )
+            fname = comp_dir / f'{comp_name}_all_features_{suffix}.png'
+            _save_corr_heatmap(r_df_all, title, fname)
+
+_TBL_BG         = '#0e1117'
+_TBL_HEADER_BG  = '#1a1d27'
+_TBL_ROW_ALT_BG = '#13161f'
+_TBL_TEXT       = '#d0d0d0'
+_TBL_HEADER_TXT = '#7a8099'
+_POS_STRONG     = '#ff6b35'
+_POS_MEDIUM     = '#e8943a'
+_NEG_STRONG     = '#2ecc71'
+_NEG_MEDIUM     = '#27ae60'
+_NEAR_ZERO      = '#8899aa'
+
+
+def _tbl_fmt_value(v):
+    if pd.isna(v):     return '—'
+    av = abs(v)
+    if av == 0:        return '0'
+    if av >= 1000:     return f'{v:,.0f}'
+    if av >= 10:       return f'{v:.2f}'
+    if av >= 1:        return f'{v:.3f}'
+    if av >= 0.001:    return f'{v:.4f}'
+    return f'{v:.2e}'
+
+
+def _tbl_fmt_pct(pct):
+    if pd.isna(pct) or abs(pct) <= 5:
+        return '(≈0%)'
+    sign = '+' if pct > 0 else ''
+    return f'({sign}{pct:.0f}%)'
+
+
+def _tbl_pct_color(pct):
+    if pd.isna(pct) or abs(pct) <= 5:
+        return _NEAR_ZERO
+    if pct > 0:
+        return _POS_STRONG if abs(pct) > 30 else _POS_MEDIUM
+    return _NEG_STRONG if abs(pct) > 30 else _NEG_MEDIUM
+
+
+def _draw_comparison_table(
+    feat_list, real_vals, means_v, pct_df, sources,
+    title_str, outfile,
+    figsize_w=14.0, row_height=0.40, dpi=180,
+    col_header_colors=None,
+    strip_stat_suffix=True,
+):
+    """
+    Render and save one dark-themed comparison table.
+    """
+    import matplotlib.patches as mpatches
+
+    n_rows  = len(feat_list)
+    n_cols  = 2 + len(sources)
+    fig_h   = max(4.0, n_rows * row_height + 1.8)
+
+    fig = plt.figure(figsize=(figsize_w, fig_h), facecolor=_TBL_BG)
+    ax  = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor(_TBL_BG)
+    ax.axis('off')
+
+    col_labels = ['FEATURE', 'REAL'] + sources
+    raw_widths = [0.30] + [0.12] * (n_cols - 1)
+    tot_w      = sum(raw_widths)
+    col_widths = [w / tot_w for w in raw_widths]
+    col_lefts  = []
+    x = 0.01
+    for w in col_widths:
+        col_lefts.append(x)
+        x += w * (0.99 / tot_w * tot_w)
+
+    def _cell(ridx, cidx, text, color=_TBL_TEXT,
+              bg=_TBL_BG, fs=8.5, bold=False, align='right'):
+        x0 = col_lefts[cidx]
+        cw = col_widths[cidx]
+        y0 = 1.0 - (ridx + 1) * (1.0 / (n_rows + 2))
+        ch = 1.0 / (n_rows + 2)
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (x0, y0), cw, ch,
+            boxstyle='square,pad=0', linewidth=0,
+            facecolor=bg, transform=ax.transAxes, clip_on=False,
+        ))
+        tx = x0 + cw * (0.95 if align == 'right' else 0.05)
+        ax.text(
+            tx, y0 + ch * 0.5, text,
+            color=color, fontsize=fs,
+            ha=align, va='center',
+            fontweight='bold' if bold else 'normal',
+            transform=ax.transAxes, clip_on=False,
+            fontfamily='monospace',
+        )
+
+    for ci, lbl in enumerate(col_labels):
+        hdr_color = (
+            (col_header_colors or {}).get(lbl, _TBL_HEADER_TXT)
+        )
+        _cell(0, ci, lbl.upper().replace('_', ' '),
+              color=hdr_color, bg=_TBL_HEADER_BG,
+              fs=8, bold=True, align='left' if ci == 0 else 'right')
+
+    for ri, feat in enumerate(feat_list, start=1):
+        row_bg = _TBL_ROW_ALT_BG if ri % 2 == 0 else _TBL_BG
+        disp = (
+            re.sub(r'_(mean|std|min|max)$', '', feat)
+            if strip_stat_suffix
+            else feat
+        ).replace('_', ' ').title()
+        _cell(ri, 0, disp, color=_TBL_TEXT, bg=row_bg, align='left')
+        _cell(ri, 1, _tbl_fmt_value(real_vals[feat]),
+              color=_TBL_TEXT, bg=row_bg)
+        for si, src in enumerate(sources):
+            sv  = means_v.loc[src, feat] if src in means_v.index else np.nan
+            pct = pct_df.loc[feat, src]  if src in pct_df.columns else np.nan
+            txt = f'{_tbl_fmt_value(sv)}  {_tbl_fmt_pct(pct)}'
+            _cell(ri, 2 + si, txt, color=_tbl_pct_color(pct), bg=row_bg)
+
+    ax.text(0.01, 0.995, title_str,
+            color='#aabbcc', fontsize=9.5, fontweight='bold',
+            ha='left', va='top', transform=ax.transAxes, fontfamily='monospace')
+
+    legend = [
+        (_POS_STRONG, '> +30%'), (_POS_MEDIUM, '+15–30%'),
+        (_NEAR_ZERO,  '≈ 0%'),
+        (_NEG_MEDIUM, '−15–30%'), (_NEG_STRONG, '< −30%'),
+    ]
+    lx = 0.01
+    ax.text(lx, 0.008, 'Deviation from REAL:', color=_TBL_HEADER_TXT,
+            fontsize=7, ha='left', va='bottom', transform=ax.transAxes)
+    lx += 0.16
+    for col, lbl in legend:
+        ax.text(lx, 0.008, f'■ {lbl}', color=col, fontsize=7,
+                ha='left', va='bottom', transform=ax.transAxes,
+                fontfamily='monospace')
+        lx += 0.10
+
+    plt.savefig(outfile, dpi=dpi, bbox_inches='tight',
+                facecolor=_TBL_BG, edgecolor='none')
+    plt.close()
+    print(f'  ✅ {outfile}')
+
+
+
+def _build_pred_split(comp_df, feat_cols, sources, model_col,
+                      pred_col='predicted_class',
+                      real_label='Real', fake_label='Fake'):
+    compound_sources = []
+    rows = {}
+    col_header_colors = {}
+    for src in sources:
+        src_df = comp_df[comp_df[model_col] == src]
+        for pred_label, color in [(real_label, _NEG_MEDIUM), (fake_label, _POS_STRONG)]:
+            key = f'{src} [{pred_label}]'
+            compound_sources.append(key)
+            col_header_colors[key] = color
+            subset = src_df[src_df[pred_col] == pred_label]
+            rows[key] = (
+                subset[feat_cols].mean()
+                if not subset.empty
+                else pd.Series(np.nan, index=feat_cols)
+            )
+    means_split = pd.DataFrame(rows).T
+    return means_split, compound_sources, col_header_colors
+
+
+def plot_feature_comparison_table(
+    features_df: pd.DataFrame,
+    lime_json_path: Path,
+    outputdir: Path,
+    component_col: str = 'component_name',
+    model_col: str = 'model',
+    model_order: list = None,
+    feature_groups: dict = None,
+    multi_stat_groups: list = None,
+    sort_by_deviation: bool = True,
+    figsize_w: float = 14.0,
+    row_height: float = 0.40,
+    dpi: int = 180,
+) -> None:
+    """
+    Per component × feature group, create dark-themed comparison table PNGs.
+
+    Structure
+    ---------
+    <outputdir>/feature_comparison_tables/
+      <component>/
+        <GroupName>/
+          <comp>_<GroupName>.png
+        Frequency_spectrum/
+          <comp>_Frequency_spectrum_mean.png   <- 4 separate files
+          <comp>_Frequency_spectrum_std.png
+          <comp>_Frequency_spectrum_min.png
+          <comp>_Frequency_spectrum_max.png
+    """
+    if model_order is None:
+        model_order = MODEL_ORDER
+    if feature_groups is None:
+        feature_groups = FEATURE_GROUPS_DEF
+    if multi_stat_groups is None:
+        multi_stat_groups = ['Frequency_spectrum']
+
+    root_out = outputdir / 'feature_comparison_tables'
+    root_out.mkdir(parents=True, exist_ok=True)
+
+    setup_professional_style()
+    lime_df = load_audiolime_explanations(lime_json_path)
+    full_df = pd.merge(features_df, lime_df, on=["model", "track", "component_name"], how="inner")
+
+    _meta = {
+        model_col, component_col, 'track', 'track_id', 'component_key',
+        'data_type', 'data_type_str', 'component_type', 'importance',
+        'abs_importance', 'track_stem', 'low_freq', 'high_freq', 'band_type',
+        'vocals0_influence', 'drums0_influence', 'bass0_influence', 'other0_influence',
+        'prediction_score', 'predicted_class',
+    }
+    all_feat_cols = [
+        c for c in full_df.columns
+        if c not in _meta and pd.api.types.is_numeric_dtype(full_df[c])
+    ]
+
+    def _feat_group(col):
+        for g, prefixes in feature_groups.items():
+            for p in prefixes:
+                if col.startswith(p):
+                    return g
+        return 'inne'
+
+    _stat_re = re.compile(r'_(mean|std|min|max)$')
+    stat_order_list = ['mean', 'std', 'min', 'max']
+
+    components = ['vocals0', 'drums0', 'bass0', 'other0']
+
+    for comp in components:
+        comp_name = comp.replace('0', '')
+        comp_df   = full_df[full_df[component_col] == comp]
+        if comp_df.empty:
+            print(f'  ⏭️  No data for {comp}')
+            continue
+
+        means = comp_df.groupby(model_col)[all_feat_cols].mean()
+        if 'REAL' not in means.index:
+            print(f'  ⚠️  No REAL rows for {comp}')
+            continue
+
+        real_vals = means.loc['REAL']
+        sources   = [s for s in model_order if s in means.index and s != 'REAL']
+
+        pct_diffs = {}
+        for src in sources:
+            sv = means.loc[src]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                pct = np.where(
+                    real_vals != 0,
+                    (sv - real_vals) / real_vals.abs() * 100,
+                    np.nan,
+                )
+            pct_diffs[src] = pd.Series(pct, index=all_feat_cols)
+        pct_df_full = pd.DataFrame(pct_diffs)
+
+        valid     = real_vals.dropna().index
+        real_vals = real_vals.loc[valid]
+        means_v   = means[valid]
+        pct_df_full = pct_df_full.loc[valid]
+
+        comp_root = root_out / comp_name
+        comp_root.mkdir(parents=True, exist_ok=True)
+
+        comp_df_full = comp_df.copy()
+        all_groups = list(feature_groups.keys()) + ['inne']
+        for grp in all_groups:
+            grp_feats = [c for c in valid if _feat_group(c) == grp]
+            if not grp_feats:
+                continue
+
+            grp_dir = comp_root / grp
+            grp_dir.mkdir(parents=True, exist_ok=True)
+
+            if grp in multi_stat_groups:
+                for stat in stat_order_list:
+                    stat_feats = [c for c in grp_feats if c.endswith(f'_{stat}')]
+                    if not stat_feats:
+                        continue
+                    if sort_by_deviation:
+                        stat_feats = list(
+                            pct_df_full.loc[stat_feats].abs()
+                            .max(axis=1).sort_values(ascending=False).index
+                        )
+                    title = (
+                        f'{comp_name.upper()} | {grp.replace("_", " ")} '
+                        f'[{stat.upper()}] – mean values vs REAL baseline'
+                    )
+                    fname = grp_dir / f'{comp_name}_{grp}_{stat}.png'
+                    _draw_comparison_table(
+                        stat_feats, real_vals, means_v, pct_df_full, sources,
+                        title, fname, figsize_w=figsize_w,
+                        row_height=row_height, dpi=dpi,
+                    )
+                    ms, cs, chc = _build_pred_split(
+                        comp_df_full, stat_feats, sources, model_col)
+                    if not ms.empty:
+                        pct_p = pd.DataFrame({
+                            c: np.where(
+                                real_vals[stat_feats] != 0,
+                                (ms.loc[c] - real_vals[stat_feats])
+                                / real_vals[stat_feats].abs() * 100,
+                                np.nan,
+                            ) if c in ms.index else np.nan
+                            for c in cs
+                        }, index=stat_feats)
+                        title_p = title + '  |  split by prediction'
+                        fname_p = grp_dir / f'{comp_name}_{grp}_{stat}_by_pred.png'
+                        _draw_comparison_table(
+                            stat_feats, real_vals, ms, pct_p, cs,
+                            title_p, fname_p,
+                            figsize_w=figsize_w * 1.7,
+                            row_height=row_height, dpi=dpi,
+                            col_header_colors=chc,
+                        )
+            else:
+                if sort_by_deviation:
+                    grp_feats = list(
+                        pct_df_full.loc[grp_feats].abs()
+                        .max(axis=1).sort_values(ascending=False).index
+                    )
+                title = (
+                    f'{comp_name.upper()} | {grp.replace("_", " ")} '
+                    f'– mean values vs REAL baseline'
+                )
+                fname = grp_dir / f'{comp_name}_{grp}.png'
+                _draw_comparison_table(
+                    grp_feats, real_vals, means_v, pct_df_full, sources,
+                    title, fname, figsize_w=figsize_w,
+                    row_height=row_height, dpi=dpi,
+                    strip_stat_suffix=False,
+                )
+                ms, cs, chc = _build_pred_split(
+                    comp_df_full, grp_feats, sources, model_col)
+                if not ms.empty:
+                    pct_p = pd.DataFrame({
+                        c: np.where(
+                            real_vals[grp_feats] != 0,
+                            (ms.loc[c] - real_vals[grp_feats])
+                            / real_vals[grp_feats].abs() * 100,
+                            np.nan,
+                        ) if c in ms.index else np.nan
+                        for c in cs
+                    }, index=grp_feats)
+                    title_p = title + '  |  split by prediction'
+                    fname_p = grp_dir / f'{comp_name}_{grp}_by_pred.png'
+                    _draw_comparison_table(
+                        grp_feats, real_vals, ms, pct_p, cs,
+                        title_p, fname_p,
+                        figsize_w=figsize_w * 1.7,
+                        row_height=row_height, dpi=dpi,
+                        col_header_colors=chc,
+                        strip_stat_suffix=False,
+                    )
+
+    print(f'\n✅  Comparison tables saved to: {root_out}\n')
+
 def main():
     args = parse_args()
     config = load_yaml(Path(args.config))
@@ -1504,31 +2150,43 @@ def main():
 
     features_df, features_to_analyze = load_and_prepare_data_full(features_path)
 
-    viz_component_pos_neg_boxplots(
-        features_df,
-        base_output_folder=output_root,
-    )
+    # viz_component_pos_neg_boxplots(
+    #     features_df,
+    #     base_output_folder=output_root,
+    # )
 
-    viz_feature_groups_by_component(
-        features_df,
-        base_output_folder=output_root
-    )
+    # viz_feature_groups_by_component(
+    #     features_df,
+    #     base_output_folder=output_root
+    # )
 
-    viz_feature_values_vs_importance_by_component(
-        features_df,
-        base_output_folder=output_root,
-    )
+    # viz_feature_values_vs_importance_by_component(
+    #     features_df,
+    #     base_output_folder=output_root,
+    # )
 
     if explanations_path:
         explanations_path = Path(explanations_path) / "explanations.json"
-        plot_audiolime_predictions_influence_features(
-            features_df, Path(explanations_path), output_root
-        )
+        # plot_audiolime_predictions_influence_features(
+        #     features_df, Path(explanations_path), output_root
+        # )
 
-        plot_audiolime_3rows_multicolumn(
+        # plot_audiolime_3rows_multicolumn(
+        #     features_df=features_df,
+        #     lime_json_path=Path(explanations_path),
+        #     outputdir=output_root
+        # )
+
+        # plot_feature_correlation_r_heatmaps(
+        #     features_df=features_df,
+        #     lime_json_path=Path(explanations_path),
+        #     outputdir=output_root,
+        # )
+        
+        plot_feature_comparison_table(
             features_df=features_df,
             lime_json_path=Path(explanations_path),
-            outputdir=output_root
+            outputdir=output_root,
         )
 
 if __name__ == "__main__":
