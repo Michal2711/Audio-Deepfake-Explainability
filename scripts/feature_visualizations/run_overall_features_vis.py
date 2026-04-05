@@ -1292,6 +1292,514 @@ def viz_features_vs_prediction_scatter(merged_df, output_root: Path, confidence_
     print(f"   • Output folder: {base_folder}/")
     print("=" * 80 + "\n")
 
+MODEL_ORDER = ['ElevenLabs', 'REAL', 'SUNO', 'SUNO_PRO', 'UDIO']
+
+TYPE_MAPPING = {
+    'ElevenLabs': 'GENERATED',
+    'REAL':       'REAL',
+    'SUNO':       'GENERATED',
+    'SUNO_PRO':   'GENERATED',
+    'UDIO':       'GENERATED',
+}
+
+FEATURE_GROUPS_DEF = {
+    'Signal_energy': [
+        'rms_'
+    ],
+    'Frequency_spectrum': [
+        'spectral_'
+    ],
+    'Fundamental_Frequency_Pitch': [
+        'f0_', 'intonation_'
+    ],
+    'Jitter_Shimmer': [
+        'jitter_', 'shimmer_'
+    ],
+    'Vocal_quality': [
+        'hnr', 'voice_breaks', 'breath_count'
+    ],
+    'Rhythm_and_temporal_features': [
+        'zero_crossing_rate', 'rhythm_'
+    ]
+}
+
+_CORR_EXCLUDE = {
+    'model', 'track', 'track_id', 'data_type', 'data_type_str',
+    'component_name', 'component_type', 'component_key',
+    'prediction_score', 'predicted_class',
+    'vocals0_influence', 'drums0_influence', 'bass0_influence', 'other0_influence',
+    'abs_importance', 'importance', 'component', 'track_stem',
+    'low_freq', 'high_freq', 'band_type',
+}
+
+TBL_BG         = '#0e1117'
+TBL_HEADER_BG  = '#1a1d27'
+TBL_ROW_ALT_BG = '#13161f'
+TBL_TEXT       = '#d0d0d0'
+TBL_HEADER_TXT = '#7a8099'
+TBL_POS_STRONG = '#ff6b35'
+TBL_POS_MEDIUM = '#e8943a'
+TBL_NEG_STRONG = '#2ecc71'
+TBL_NEG_MEDIUM = '#27ae60'
+TBL_NEAR_ZERO  = '#8899aa'
+
+def assign_feature_group_overall(col: str) -> str:
+    for group, prefixes in FEATURE_GROUPS_DEF.items():
+        for prefix in prefixes:
+            if col.startswith(prefix):
+                return group
+    return 'other'
+
+def _build_corr_matrix_overall(df, feature_cols, target_col, groups_bool):
+    stat_order  = {'mean': 0, 'std': 1, 'min': 2, 'max': 3}
+    stat_suffix = re.compile(r'_(mean|std|min|max)$')
+
+    rdict = {}
+    for label, mask in groups_bool.items():
+        gdf   = df[mask]
+        rvals = {}
+        for feat in feature_cols:
+            sub = gdf[[feat, target_col]].dropna()
+            rvals[feat] = sub[feat].corr(sub[target_col]) if len(sub) >= 3 else np.nan
+        rdict[label] = rvals
+
+    rdf = pd.DataFrame(rdict).dropna(how='all')
+    if rdf.empty:
+        return rdf
+
+    def _base(c): return stat_suffix.sub('', c)
+    def _rank(c):
+        m = stat_suffix.search(c)
+        return stat_order.get(m.group(1), 99) if m else -1
+
+    rdf['_base'] = [_base(c) for c in rdf.index]
+    rdf['_bimp'] = (rdf.drop(columns=['_base']).abs().max(axis=1)
+                    .groupby(rdf['_base']).transform('max'))
+    rdf['_rank'] = [_rank(c) for c in rdf.index]
+    rdf = (rdf.sort_values(['_bimp', '_base', '_rank'],
+                           ascending=[False, True, True])
+              .drop(columns=['_base', '_bimp', '_rank']))
+    return rdf
+
+def _save_corr_heatmap_overall(rdf, title, out_file):
+    if rdf.empty:
+        print(f'  [SKIP] Empty matrix → {out_file.name}')
+        return
+    n_feats = len(rdf)
+    n_cols  = len(rdf.columns)
+    fig_h   = max(4, n_feats * 0.42 + 2.5)
+    fig_w   = max(10, n_cols * 1.6)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    mask_nan = rdf.isnull()
+    sns.heatmap(
+        rdf, ax=ax, cmap='coolwarm', vmin=-1, vmax=1,
+        annot=True, fmt='.2f', linewidths=0.4, linecolor='#dddddd',
+        mask=mask_nan,
+        cbar_kws={'label': 'Pearson r', 'shrink': 0.6},
+        annot_kws={'size': 8, 'weight': 'bold'},
+    )
+    ax.patch.set_facecolor('#f0f0f0')
+    ax.set_title(title, fontsize=13, fontweight='bold', pad=14)
+    ax.set_xlabel('Group', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Feature', fontsize=11, fontweight='bold')
+    ax.tick_params(axis='x', rotation=30, labelsize=10)
+    ax.tick_params(axis='y', labelsize=8)
+    plt.tight_layout()
+    plt.savefig(out_file, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  Saved: {out_file.name}')
+
+def plot_overall_correlation_heatmap(
+    df: pd.DataFrame,
+    output_dir: Path,
+    model_order: list = None,
+) -> None:
+    """
+    For each semantic feature group, generate a Pearson r heatmap:
+        feature vs predictionscore
+
+    Columns: all | generated | real | ElevenLabs | REAL | SUNO | SUNO_PRO | UDIO
+    Rows: feature names, sorted in descending order by max|r|
+    Color:   coolwarm, range –1 … +1
+
+    Output structure:
+        output_dir/overall_correlation_r_heatmaps/
+            Signal energy/  Signal energy_r_vs_prediction.png
+            ...
+            allfeatures_r_vs_prediction.png
+    """
+    setup_professional_style()
+    sns.set_theme(style='whitegrid')
+
+    if model_order is None:
+        model_order = MODEL_ORDER
+
+    root_out = output_dir / 'overall_correlation_r_heatmaps'
+    root_out.mkdir(parents=True, exist_ok=True)
+
+    df = df.copy()
+
+    feat_cols    = [
+        c for c in df.columns
+        if c not in _CORR_EXCLUDE
+        and pd.api.types.is_numeric_dtype(df[c])
+        and df[c].notna().sum() > 0
+    ]
+    feat_to_grp  = {c: assign_feature_group_overall(c) for c in feat_cols}
+    groups_present = sorted(set(feat_to_grp.values()))
+
+    group_defs = {
+        'all':       pd.Series(True, index=df.index),
+        'generated': df['data_type'] == 'GENERATED',
+        'real':      df['data_type'] == 'REAL',
+        **{m: df['model'] == m for m in model_order if m in df['model'].unique()},
+    }
+
+    target_col = 'prediction_score'
+    if target_col not in df.columns:
+        print('[WARN] Column "prediction_score" not found in DataFrame → skipping overall correlation heatmaps')
+        return
+
+    print('─' * 70)
+    print('Genearating OVERALL heatmap correlation r')
+    print(f'  Feature groups: {groups_present}')
+    print('─' * 70)
+
+    for feat_group in groups_present:
+        grp_feats = [
+            c for c, g in feat_to_grp.items()
+            if g == feat_group and df[c].notna().sum() >= 3
+        ]
+        if not grp_feats:
+            continue
+
+        grp_dir = root_out / feat_group
+        grp_dir.mkdir(parents=True, exist_ok=True)
+
+        rdf   = _build_corr_matrix_overall(df, grp_feats, target_col, group_defs)
+        title = f'{feat_group}  –  Pearson r vs Prediction P(fake)'
+        out_f = grp_dir / f'{feat_group}_r_vs_prediction.png'
+        _save_corr_heatmap_overall(rdf, title, out_f)
+
+    all_feats = [c for c in feat_cols if df[c].notna().sum() >= 3]
+    rdf_all   = _build_corr_matrix_overall(df, all_feats, target_col, group_defs)
+    if not rdf_all.empty and 'all' in rdf_all.columns:
+        rdf_all = rdf_all.reindex(
+            rdf_all['all'].abs().sort_values(ascending=False).index
+        )
+    _save_corr_heatmap_overall(
+        rdf_all,
+        'All features  –  Pearson r vs Prediction P(fake)',
+        root_out / 'all_features_r_vs_prediction.png',
+    )
+
+    print(f'Overall correlation heatmaps → {root_out}')
+    print('─' * 70)
+
+
+def _tbl_fmt_value(v):
+    if pd.isna(v): return ''
+    a = abs(v)
+    if a == 0:     return '0'
+    if a >= 1000:  return f'{v:,.0f}'
+    if a >= 10:    return f'{v:.2f}'
+    if a >= 1:     return f'{v:.3f}'
+    if a >= 0.001: return f'{v:.4f}'
+    return f'{v:.2e}'
+
+
+def _tbl_fmt_pct(pct):
+    if pd.isna(pct) or abs(pct) < 5: return ''
+    sign = '+' if pct > 0 else ''
+    return f'{sign}{pct:.0f}%'
+
+
+def _tbl_pct_color(pct):
+    if pd.isna(pct) or abs(pct) < 5: return TBL_NEAR_ZERO
+    if pct > 0: return TBL_POS_STRONG if abs(pct) >= 30 else TBL_POS_MEDIUM
+    return TBL_NEG_STRONG if abs(pct) >= 30 else TBL_NEG_MEDIUM
+
+
+def _draw_overall_table(feat_list, real_vals, means_v, pct_df, sources,
+                        title_str, out_file,
+                        figsize_w=14.0, row_height=0.40, dpi=180,
+                        col_header_colors=None, strip_stat_suffix=True):
+    import matplotlib.patches as mpatches
+
+    n_rows = len(feat_list)
+    n_cols = 2 + len(sources)
+    fig_h  = max(4.0, n_rows * row_height + 1.8)
+    fig    = plt.figure(figsize=(figsize_w, fig_h), facecolor=TBL_BG)
+    ax     = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor(TBL_BG)
+    ax.axis('off')
+
+    col_labels = ['FEATURE', 'REAL'] + sources
+    raw_widths = [0.30] + [0.12] * (n_cols - 1)
+    tot_w      = sum(raw_widths)
+    col_widths = [w / tot_w for w in raw_widths]
+    col_lefts  = []
+    x = 0.01
+    for w in col_widths:
+        col_lefts.append(x)
+        x += w * 0.99 / tot_w
+
+    def cell(r_idx, c_idx, text, color=TBL_TEXT, bg=TBL_BG,
+             fs=8.5, bold=False, align='right'):
+        x0 = col_lefts[c_idx]
+        cw = col_widths[c_idx]
+        y0 = 1.0 - (r_idx + 1) * (1.0 / (n_rows + 2))
+        ch = 1.0 / (n_rows + 2)
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (x0, y0), cw, ch,
+            boxstyle='square,pad=0', linewidth=0, 
+            facecolor=bg, transform=ax.transAxes, clip_on=False,
+        ))
+        tx = x0 + cw * 0.95 if align == 'right' else x0 + cw * 0.05
+        ax.text(tx, y0 + ch * 0.5, text,
+                color=color, fontsize=fs, ha=align, va='center',
+                fontweight='bold' if bold else 'normal',
+                transform=ax.transAxes, clip_on=False,
+                fontfamily='monospace')
+
+    for ci, lbl in enumerate(col_labels):
+        hdr_color = (col_header_colors or {}).get(lbl, TBL_HEADER_TXT)
+        cell(0, ci, lbl.upper().replace('_', ' '),
+             color=hdr_color, bg=TBL_HEADER_BG, fs=8, bold=True,
+             align='left' if ci == 0 else 'right')
+
+    for ri, feat in enumerate(feat_list, start=1):
+        row_bg = TBL_ROW_ALT_BG if ri % 2 == 0 else TBL_BG
+        disp   = re.sub(r'_(mean|std|min|max)$', '', feat) if strip_stat_suffix else feat
+        disp   = disp.replace('_', ' ').title()
+        cell(ri, 0, disp, color=TBL_TEXT, bg=row_bg, align='left')
+        real_v = real_vals[feat] if feat in real_vals.index else np.nan
+        cell(ri, 1, _tbl_fmt_value(real_v), color=TBL_TEXT, bg=row_bg)
+        for si, src in enumerate(sources):
+            sv  = means_v.loc[src, feat] if src in means_v.index else np.nan
+            pct = pct_df.loc[feat, src]  if src in pct_df.columns else np.nan
+            txt = f'{_tbl_fmt_value(sv)} {_tbl_fmt_pct(pct)}'
+            cell(ri, 2 + si, txt, color=_tbl_pct_color(pct), bg=row_bg)
+
+    ax.text(0.01, 0.995, title_str,
+            color='#aabbcc', fontsize=9.5, fontweight='bold',
+            ha='left', va='top', transform=ax.transAxes, fontfamily='monospace')
+
+    legend = [
+        (TBL_POS_STRONG, '≥+30%'), (TBL_POS_MEDIUM, '+15-30%'),
+        (TBL_NEAR_ZERO,  '≈0%'),
+        (TBL_NEG_MEDIUM, '−15-30%'), (TBL_NEG_STRONG, '≥−30%'),
+    ]
+    ax.text(0.01, 0.008, 'Deviation from REAL: ',
+            color=TBL_HEADER_TXT, fontsize=7, ha='left', va='bottom',
+            transform=ax.transAxes)
+    lx = 0.17
+    for col, lbl in legend:
+        ax.text(lx, 0.008, f' {lbl}', color=col, fontsize=7,
+                ha='left', va='bottom', transform=ax.transAxes,
+                fontfamily='monospace')
+        lx += 0.10
+
+    plt.savefig(out_file, dpi=dpi, bbox_inches='tight',
+                facecolor=TBL_BG, edgecolor='none')
+    plt.close()
+    print(f'  Saved: {out_file.name}')
+
+
+def _build_pred_split_overall(df, feat_cols, sources):
+    compound, col_colors, rows = [], {}, {}
+    if 'pred_label' not in df.columns:
+        return pd.DataFrame(), [], {}
+    for src in sources:
+        src_df = df[df['model'] == src]
+        for pred_lbl, color in [('Real', TBL_NEG_MEDIUM), ('Fake', TBL_POS_STRONG)]:
+            key = f'{src} {pred_lbl}'
+            compound.append(key)
+            col_colors[key] = color
+            subset = src_df[src_df['pred_label'] == pred_lbl]
+            rows[key] = (subset[feat_cols].mean()
+                         if not subset.empty
+                         else pd.Series(np.nan, index=feat_cols))
+    means_split = pd.DataFrame(rows).T
+    return means_split, compound, col_colors
+
+def plot_overall_comparison_table(
+    df: pd.DataFrame,
+    output_dir: Path,
+    model_order: list = None,
+    feature_groups: dict = None,
+    multi_stat_groups: list = None,
+    sort_by_deviation: bool = True,
+    figsize_w: float = 14.0,
+    row_height: float = 0.40,
+    dpi: int = 180,
+) -> None:
+    """
+    For each semantic feature group, generate a dark-themed PNG comparison table.
+
+    Rows: features names, sorted by max|% deviation from REAL
+    Columns: REAL (baseline) | ElevenLabs | SUNO | SUNOPRO | UDIO
+    Color:   deviation from REAL (green = less than REAL, orange = more than REAL)
+
+    Output structure:
+        output_dir/overall_comparison_tables/
+            SignalEnergy/     Signal energy.png   + Signal energy_by_pred.png
+            FrequencySpectrum/
+                Frequency spectrum_mean.png       (osobne pliki per stat)
+                Frequency spectrum_mean_by_pred.png
+                ...
+            ...
+            allfeatures.png
+    """
+    setup_professional_style()
+
+    if model_order    is None: model_order    = MODEL_ORDER
+    if feature_groups is None: feature_groups = FEATURE_GROUPS_DEF
+    if multi_stat_groups is None: multi_stat_groups = ['Frequency spectrum']
+
+    root_out = output_dir / 'overall_comparison_tables'
+    root_out.mkdir(parents=True, exist_ok=True)
+
+    meta_cols = {
+        'model', 'track_id', 'track_id_pred', 'track_stem', 'data_type',
+        'prediction_score', 'pred_label', 'true_label', 'is_correct', 'outcome',
+    }
+    all_feat_cols = [
+        c for c in df.columns
+        if c not in meta_cols and pd.api.types.is_numeric_dtype(df[c])
+    ]
+
+    stat_re         = re.compile(r'_(mean|std|min|max)$')
+    stat_order_list = ['mean', 'std', 'min', 'max']
+
+    def feat_group(col):
+        for g, prefixes in feature_groups.items():
+            for p in prefixes:
+                if col.startswith(p):
+                    return g
+        return 'other'
+
+    means = df.groupby('model')[all_feat_cols].mean()
+    if 'REAL' not in means.index:
+        print('[WARN] Baseline "REAL" not found in data → cannot compute deviations → skipping overall comparison tables')
+        return
+
+    real_vals = means.loc['REAL']
+    sources   = [m for m in model_order if m in means.index and m != 'REAL']
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        pct_diffs = {}
+        for src in sources:
+            sv  = means.loc[src]
+            pct = np.where(real_vals != 0,
+                           (sv - real_vals) / real_vals.abs() * 100,
+                           np.nan)
+            pct_diffs[src] = pd.Series(pct, index=all_feat_cols)
+    pct_df_full = pd.DataFrame(pct_diffs)
+
+    valid       = real_vals.dropna().index
+    real_vals   = real_vals.loc[valid]
+    means_v     = means[valid]
+    pct_df_full = pct_df_full.loc[valid]
+
+    all_groups = list(feature_groups.keys()) + ['other']
+
+    print('─' * 70)
+    print('Generating OVERALL comparison tables (without splitting by components)')
+    print('─' * 70)
+
+    for grp in all_groups:
+        grp_feats = [c for c in valid if feat_group(c) == grp]
+        if not grp_feats:
+            continue
+
+        grp_dir = root_out / grp.replace(' ', '')
+        grp_dir.mkdir(parents=True, exist_ok=True)
+
+        if grp in multi_stat_groups:
+            for stat in stat_order_list:
+                stat_feats = [c for c in grp_feats if c.endswith(f'_{stat}')]
+                if not stat_feats:
+                    continue
+                if sort_by_deviation:
+                    stat_feats = list(
+                        pct_df_full.loc[stat_feats].abs()
+                        .max(axis=1).sort_values(ascending=False).index
+                    )
+                title = f'OVERALL  {grp} [{stat.upper()}]  –  mean vs baseline REAL'
+                _draw_overall_table(
+                    stat_feats, real_vals, means_v, pct_df_full, sources,
+                    title, grp_dir / f'{grp}_{stat}.png',
+                    figsize_w=figsize_w, row_height=row_height, dpi=dpi,
+                )
+                ms, cs, chc = _build_pred_split_overall(df, stat_feats, sources)
+                if not ms.empty:
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        pctp = pd.DataFrame({
+                            c: np.where(
+                                real_vals[stat_feats] != 0,
+                                (ms.loc[c] - real_vals[stat_feats])
+                                / real_vals[stat_feats].abs() * 100,
+                                np.nan,
+                            ) if c in ms.index else np.nan
+                            for c in cs
+                        }, index=stat_feats)
+                    _draw_overall_table(
+                        stat_feats, real_vals, ms, pctp, cs,
+                        f'{title} – podział wg predykcji',
+                        grp_dir / f'{grp}_{stat}_by_pred.png',
+                        figsize_w=figsize_w * 1.6, row_height=row_height,
+                        dpi=dpi, col_header_colors=chc,
+                    )
+        else:
+            if sort_by_deviation:
+                grp_feats = list(
+                    pct_df_full.loc[grp_feats].abs()
+                    .max(axis=1).sort_values(ascending=False).index
+                )
+            title = f'OVERALL  {grp}  –  mean vs baseline REAL'
+            _draw_overall_table(
+                grp_feats, real_vals, means_v, pct_df_full, sources,
+                title, grp_dir / f'{grp}.png',
+                figsize_w=figsize_w, row_height=row_height, dpi=dpi,
+                strip_stat_suffix=False,
+            )
+            ms, cs, chc = _build_pred_split_overall(df, grp_feats, sources)
+            if not ms.empty:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    pctp = pd.DataFrame({
+                        c: np.where(
+                            real_vals[grp_feats] != 0,
+                            (ms.loc[c] - real_vals[grp_feats])
+                            / real_vals[grp_feats].abs() * 100,
+                            np.nan,
+                        ) if c in ms.index else np.nan
+                        for c in cs
+                    }, index=grp_feats)
+                _draw_overall_table(
+                    grp_feats, real_vals, ms, pctp, cs,
+                    f'{title} – decomposition by prediction',
+                    grp_dir / f'{grp}_by_pred.png',
+                    figsize_w=figsize_w * 1.6, row_height=row_height,
+                    dpi=dpi, col_header_colors=chc, strip_stat_suffix=False,
+                )
+
+    all_valid = list(valid)
+    if sort_by_deviation:
+        all_valid = list(
+            pct_df_full.abs().max(axis=1).sort_values(ascending=False).index
+        )
+    _draw_overall_table(
+        all_valid, real_vals, means_v, pct_df_full, sources,
+        'OVERALL  All features  –  mean vs baseline REAL',
+        root_out / 'all_features.png',
+        figsize_w=figsize_w, row_height=row_height, dpi=dpi,
+        strip_stat_suffix=False,
+    )
+
+    print(f'Overall comparison tables → {root_out}')
+    print('─' * 70)
+
 
 def parse_args():
     ap = argparse.ArgumentParser(
@@ -1332,18 +1840,22 @@ def main():
     # Feature distribution per model + REAL vs GENERATED
     viz_features_by_model_and_global(merged_df, output_root)
 
-    # # Correct vs incorrect classifications distribution
-    viz_features_correct_vs_incorrect(merged_df, output_root)
+    # Correct vs incorrect classifications distribution - TODO - maybe not so useful
+    # viz_features_correct_vs_incorrect(merged_df, output_root)
 
-    # # Features for TP / FP / TN / FN
+    # Features for TP / FP / TN / FN
     viz_features_by_confusion_outcome(merged_df, output_root)
 
-    # # Scatter plots: feature value vs prediction score, colored by confidence
-    viz_features_vs_prediction_scatter(merged_df, output_root, confidence_threshold=0.3)
+    # Scatter plots: feature value vs prediction score, colored by confidence
+    # viz_features_vs_prediction_scatter(merged_df, output_root, confidence_threshold=0.3)
 
-    plot_features_by_model_line_all(merged_df, output_root)
+    # plot_features_by_model_line_all(merged_df, output_root) - maybe not so useful
 
     plot_predictions_and_features_by_model_line_all(merged_df, output_root)
+
+    plot_overall_correlation_heatmap(merged_df, output_root)
+
+    plot_overall_comparison_table(merged_df, output_root)
 
 if __name__ == "__main__":
     main()
