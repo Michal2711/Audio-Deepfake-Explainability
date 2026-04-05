@@ -1615,6 +1615,7 @@ def _save_corr_heatmap(r_df, title, outfile):
 def plot_feature_correlation_r_heatmaps(
     features_df: pd.DataFrame,
     lime_json_path: Path,
+    comp_version: str,
     outputdir: Path,
     model_order: list = None,
 ) -> None:
@@ -1736,10 +1737,16 @@ def plot_feature_correlation_r_heatmaps(
                 if r_df.empty:
                     continue
 
-                title = (
-                    f'{comp_name.capitalize()} | {feat_group.replace("_", " ").title()}\n' 
-                    f'Pearson r  ←→  {target_label}'
-                )
+                if comp_version == 'separated':
+                    title = (
+                        f'{comp_name.capitalize()} | {feat_group.replace("_", " ").title()}\n' 
+                        f'Pearson r  ←→  {target_label}'
+                    )
+                elif comp_version == 'reversed':
+                    title = (
+                        f'Mix - {comp_name.capitalize()} | {feat_group.replace("_", " ").title()}\n' 
+                        f'Pearson r  ←→  {target_label}'
+                    )
                 fname = grp_dir / f'{comp_name}_{feat_group}_{suffix}.png'
                 _save_corr_heatmap(r_df, title, fname)
 
@@ -1757,10 +1764,16 @@ def plot_feature_correlation_r_heatmaps(
                     r_df_all['all'].abs().sort_values(ascending=False).index
                 )
 
-            title = (
-                f'{comp_name.capitalize()} | All features\n'
-                f'Pearson r  ←→  {target_label}  (sorted by overall |r|)'
-            )
+            if comp_version == 'separated':
+                title = (
+                    f'{comp_name.capitalize()} | All features\n'
+                    f'Pearson r  ←→  {target_label}  (sorted by overall |r|)'
+                )
+            elif comp_version == 'reversed':
+                title = (
+                    f'Mix - {comp_name.capitalize()} | All features\n'
+                    f'Pearson r  ←→  {target_label}  (sorted by overall |r|)'
+                )
             fname = comp_dir / f'{comp_name}_all_features_{suffix}.png'
             _save_corr_heatmap(r_df_all, title, fname)
 
@@ -1929,6 +1942,7 @@ def _build_pred_split(comp_df, feat_cols, sources, model_col,
 def plot_feature_comparison_table(
     features_df: pd.DataFrame,
     lime_json_path: Path,
+    comp_version: str,
     outputdir: Path,
     component_col: str = 'component_name',
     model_col: str = 'model',
@@ -2048,10 +2062,17 @@ def plot_feature_comparison_table(
                             pct_df_full.loc[stat_feats].abs()
                             .max(axis=1).sort_values(ascending=False).index
                         )
-                    title = (
-                        f'{comp_name.upper()} | {grp.replace("_", " ")} '
-                        f'[{stat.upper()}] – mean values vs REAL baseline'
-                    )
+                    
+                    if comp_version == 'separated':
+                        title = (
+                            f'{comp_name.upper()} | {grp.replace("_", " ")} '
+                            f'[{stat.upper()}] – mean values vs REAL baseline'
+                        )
+                    elif comp_version == 'reversed':
+                        title = (
+                            f'Mix - {comp_name.upper()} | {grp.replace("_", " ")} '
+                            f'[{stat.upper()}] – mean values vs REAL baseline'
+                        )
                     fname = grp_dir / f'{comp_name}_{grp}_{stat}.png'
                     _draw_comparison_table(
                         stat_feats, real_vals, means_v, pct_df_full, sources,
@@ -2085,10 +2106,17 @@ def plot_feature_comparison_table(
                         pct_df_full.loc[grp_feats].abs()
                         .max(axis=1).sort_values(ascending=False).index
                     )
-                title = (
-                    f'{comp_name.upper()} | {grp.replace("_", " ")} '
-                    f'– mean values vs REAL baseline'
-                )
+
+                if comp_version == 'separated':
+                    title = (
+                        f'{comp_name.upper()} | {grp.replace("_", " ")} '
+                        f'– mean values vs REAL baseline'
+                    )
+                elif comp_version == 'reversed':
+                    title = (
+                        f'Mix - {comp_name.upper()} | {grp.replace("_", " ")} '
+                        f'– mean values vs REAL baseline'
+                    )
                 fname = grp_dir / f'{comp_name}_{grp}.png'
                 _draw_comparison_table(
                     grp_feats, real_vals, means_v, pct_df_full, sources,
@@ -2177,15 +2205,17 @@ def main():
         #     outputdir=output_root
         # )
 
-        # plot_feature_correlation_r_heatmaps(
-        #     features_df=features_df,
-        #     lime_json_path=Path(explanations_path),
-        #     outputdir=output_root,
-        # )
+        plot_feature_correlation_r_heatmaps(
+            features_df=features_df,
+            lime_json_path=Path(explanations_path),
+            comp_version=comp_version,
+            outputdir=output_root,
+        )
         
         plot_feature_comparison_table(
             features_df=features_df,
             lime_json_path=Path(explanations_path),
+            comp_version=comp_version,
             outputdir=output_root,
         )
 
