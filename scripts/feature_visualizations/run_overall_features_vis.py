@@ -1645,11 +1645,11 @@ def plot_overall_comparison_table(
         output_dir/overall_comparison_tables/
             SignalEnergy/     Signal energy.png   + Signal energy_by_pred.png
             FrequencySpectrum/
-                Frequency spectrum_mean.png       (osobne pliki per stat)
+                Frequency spectrum_mean.png
                 Frequency spectrum_mean_by_pred.png
                 ...
             ...
-            allfeatures.png
+            all_features.png
     """
     setup_professional_style()
 
@@ -1702,6 +1702,56 @@ def plot_overall_comparison_table(
     means_v     = means[valid]
     pct_df_full = pct_df_full.loc[valid]
 
+    def _type_split(feat_cols):
+        has_pred = 'pred_label' in df.columns
+        masks = {'GENERATED': df['data_type'] == 'GENERATED'}
+        colors = {'GENERATED': TBL_HEADER_TXT}
+        if has_pred:
+            masks['GEN → pred Real'] = (
+                (df['data_type'] == 'GENERATED') & (df['pred_label'] == 'Real')
+            )
+            masks['GEN → pred Fake'] = (
+                (df['data_type'] == 'GENERATED') & (df['pred_label'] == 'Fake')
+            )
+            colors['GEN → pred Real'] = TBL_NEG_MEDIUM
+            colors['GEN → pred Fake'] = TBL_POS_STRONG
+
+        rows = {}
+        for label, mask in masks.items():
+            subset = df[mask]
+            rows[label] = (subset[feat_cols].mean()
+                           if not subset.empty
+                           else pd.Series(np.nan, index=feat_cols))
+
+        mv = pd.DataFrame(rows).T
+        srcs = list(masks.keys())
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            pd_diffs = {}
+            for src in srcs:
+                sv  = mv.loc[src]
+                pct = np.where(
+                    real_vals[feat_cols] != 0,
+                    (sv - real_vals[feat_cols]) / real_vals[feat_cols].abs() * 100,
+                    np.nan,
+                )
+                pd_diffs[src] = pd.Series(pct, index=feat_cols)
+        pct = pd.DataFrame(pd_diffs)
+
+        return mv, pct, srcs, colors
+
+    def _pred_split_pct(ms, cs, feat_cols):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return pd.DataFrame({
+                c: np.where(
+                    real_vals[feat_cols] != 0,
+                    (ms.loc[c] - real_vals[feat_cols])
+                    / real_vals[feat_cols].abs() * 100,
+                    np.nan,
+                ) if c in ms.index else np.nan
+                for c in cs
+            }, index=feat_cols)
+
     all_groups = list(feature_groups.keys()) + ['other']
 
     print('─' * 70)
@@ -1734,23 +1784,23 @@ def plot_overall_comparison_table(
                 )
                 ms, cs, chc = _build_pred_split_overall(df, stat_feats, sources)
                 if not ms.empty:
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        pctp = pd.DataFrame({
-                            c: np.where(
-                                real_vals[stat_feats] != 0,
-                                (ms.loc[c] - real_vals[stat_feats])
-                                / real_vals[stat_feats].abs() * 100,
-                                np.nan,
-                            ) if c in ms.index else np.nan
-                            for c in cs
-                        }, index=stat_feats)
                     _draw_overall_table(
-                        stat_feats, real_vals, ms, pctp, cs,
-                        f'{title} – podział wg predykcji',
+                        stat_feats, real_vals, ms, 
+                        _pred_split_pct(ms, cs, stat_feats), cs,
+                        f'{title} – decomposition by prediction',
                         grp_dir / f'{grp}_{stat}_by_pred.png',
                         figsize_w=figsize_w * 1.6, row_height=row_height,
                         dpi=dpi, col_header_colors=chc,
                     )
+
+                tv_means, tv_pct, tv_sources, tv_colors = _type_split(stat_feats)
+                _draw_overall_table(
+                    stat_feats, real_vals, tv_means, tv_pct, tv_sources,
+                    f'OVERALL  {grp} [{stat.upper()}]  –  sample type vs REAL',
+                    grp_dir / f'{grp}_{stat}_by_type.png',
+                    figsize_w=figsize_w, row_height=row_height, dpi=dpi,
+                    col_header_colors=tv_colors,
+                )
         else:
             if sort_by_deviation:
                 grp_feats = list(
@@ -1766,23 +1816,22 @@ def plot_overall_comparison_table(
             )
             ms, cs, chc = _build_pred_split_overall(df, grp_feats, sources)
             if not ms.empty:
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    pctp = pd.DataFrame({
-                        c: np.where(
-                            real_vals[grp_feats] != 0,
-                            (ms.loc[c] - real_vals[grp_feats])
-                            / real_vals[grp_feats].abs() * 100,
-                            np.nan,
-                        ) if c in ms.index else np.nan
-                        for c in cs
-                    }, index=grp_feats)
                 _draw_overall_table(
-                    grp_feats, real_vals, ms, pctp, cs,
+                    grp_feats, real_vals, ms,
+                    _pred_split_pct(ms, cs, grp_feats), cs,
                     f'{title} – decomposition by prediction',
                     grp_dir / f'{grp}_by_pred.png',
                     figsize_w=figsize_w * 1.6, row_height=row_height,
                     dpi=dpi, col_header_colors=chc, strip_stat_suffix=False,
                 )
+            tv_means, tv_pct, tv_sources, tv_colors = _type_split(grp_feats)
+            _draw_overall_table(
+                grp_feats, real_vals, tv_means, tv_pct, tv_sources,
+                f'OVERALL  {grp}  –  sample type vs REAL',
+                grp_dir / f'{grp}_by_type.png',
+                figsize_w=figsize_w, row_height=row_height, dpi=dpi,
+                col_header_colors=tv_colors, strip_stat_suffix=False,
+            )
 
     all_valid = list(valid)
     if sort_by_deviation:
@@ -1795,6 +1844,26 @@ def plot_overall_comparison_table(
         root_out / 'all_features.png',
         figsize_w=figsize_w, row_height=row_height, dpi=dpi,
         strip_stat_suffix=False,
+    )
+
+    ms, cs, chc = _build_pred_split_overall(df, all_valid, sources)
+    if not ms.empty:
+        _draw_overall_table(
+            all_valid, real_vals, ms,
+            _pred_split_pct(ms, cs, all_valid), cs,
+            'OVERALL  All features  –  decomposition by prediction',
+            root_out / 'all_features_by_pred.png',
+            figsize_w=figsize_w * 1.6, row_height=row_height, dpi=dpi,
+            col_header_colors=chc, strip_stat_suffix=False,
+        )
+
+    tv_means, tv_pct, tv_sources, tv_colors = _type_split(all_valid)
+    _draw_overall_table(
+        all_valid, real_vals, tv_means, tv_pct, tv_sources,
+        'OVERALL  All features  –  sample type vs REAL',
+        root_out / 'all_features_by_type.png',
+        figsize_w=figsize_w, row_height=row_height, dpi=dpi,
+        col_header_colors=tv_colors, strip_stat_suffix=False,
     )
 
     print(f'Overall comparison tables → {root_out}')
@@ -1838,22 +1907,22 @@ def main():
     merged_df = merge_features_and_predictions(features_df, preds_df)
 
     # Feature distribution per model + REAL vs GENERATED
-    viz_features_by_model_and_global(merged_df, output_root)
+    # viz_features_by_model_and_global(merged_df, output_root)
 
     # Correct vs incorrect classifications distribution - TODO - maybe not so useful
     # viz_features_correct_vs_incorrect(merged_df, output_root)
 
     # Features for TP / FP / TN / FN
-    viz_features_by_confusion_outcome(merged_df, output_root)
+    # viz_features_by_confusion_outcome(merged_df, output_root)
 
     # Scatter plots: feature value vs prediction score, colored by confidence
     # viz_features_vs_prediction_scatter(merged_df, output_root, confidence_threshold=0.3)
 
     # plot_features_by_model_line_all(merged_df, output_root) - maybe not so useful
 
-    plot_predictions_and_features_by_model_line_all(merged_df, output_root)
+    # plot_predictions_and_features_by_model_line_all(merged_df, output_root)
 
-    plot_overall_correlation_heatmap(merged_df, output_root)
+    # plot_overall_correlation_heatmap(merged_df, output_root)
 
     plot_overall_comparison_table(merged_df, output_root)
 
